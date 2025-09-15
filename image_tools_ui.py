@@ -255,6 +255,41 @@ class ImageToolApp:
         webp_methods = ttk.Combobox(options_frame, textvariable=self.webp_compression, state="readonly", values=["auto", "lossless", "high_quality", "standard", "fast"])
         webp_methods.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
         
+        # PNG3压缩选项
+        self.png3_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="PNG3调色板压缩", variable=self.png3_var).grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        
+        # 同格式也重存选项
+        self.process_same_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="同格式也重存", variable=self.process_same_var).grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        
+        # ICO特定设置
+        ico_frame = ttk.LabelFrame(right_frame, text="ICO设置")
+        ico_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # ICO尺寸输入
+        self.ico_sizes_var = tk.StringVar(value="")
+        ttk.Label(ico_frame, text="自定义尺寸:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(ico_frame, textvariable=self.ico_sizes_var, width=20).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        # ICO常用尺寸选项
+        self.ico_size_vars = {s: tk.BooleanVar(value=(s in (16, 32, 48, 64))) for s in (16, 32, 48, 64, 128, 256)}
+        size_frame = ttk.Frame(ico_frame)
+        size_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        
+        for size in self.ico_size_vars.keys():
+            ttk.Checkbutton(size_frame, text=str(size), variable=self.ico_size_vars[size]).pack(side=tk.LEFT, padx=5)
+        
+        # ICO非方图处理方式
+        self.ico_square_mode = tk.StringVar(value="fit")
+        ttk.Label(ico_frame, text="非方图处理:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        square_frame = ttk.Frame(ico_frame)
+        square_frame.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        square_choices = [("保持原始", "keep"), ("中心裁切", "center"), ("左上裁切", "topleft"), ("等比填充", "fit")]
+        for text, value in square_choices:
+            ttk.Radiobutton(square_frame, text=text, variable=self.ico_square_mode, value=value).pack(side=tk.LEFT, padx=3)
+        
         # 输出目录设置
         output_frame = ttk.LabelFrame(right_frame, text="输出目录")
         output_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -643,7 +678,8 @@ class ImageToolApp:
                         stat_info = os.stat(file_path)
                         size = _fmt_size(stat_info.st_size)
                         modified = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat_info.st_mtime))
-                        self.src_file_list.insert('', 'end', values=(os.path.basename(file_path), size, modified))
+                        # 使用完整路径作为iid，这样就可以在需要时获取完整路径
+                        self.src_file_list.insert('', 'end', iid=file_path, values=(os.path.basename(file_path), size, modified))
                     except Exception as e:
                         self.q.put(f"ERROR 无法添加文件 {os.path.basename(file_path)}: {e}")
                 
@@ -672,7 +708,8 @@ class ImageToolApp:
                                 stat_info = os.stat(file_path)
                                 size = _fmt_size(stat_info.st_size)
                                 modified = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat_info.st_mtime))
-                                self.src_file_list.insert('', 'end', values=(os.path.basename(file_path), size, modified))
+                                # 使用完整路径作为iid，这样就可以在需要时获取完整路径
+                                self.src_file_list.insert('', 'end', iid=file_path, values=(os.path.basename(file_path), size, modified))
                                 file_count += 1
                             except Exception as e:
                                 self.q.put(f"ERROR 无法添加文件 {os.path.basename(file_path)}: {e}")
@@ -718,39 +755,117 @@ class ImageToolApp:
             self.status_var.set("开始转换...")
             self.progress_var.set(0)
             
-            # 启动转换线程
-            threading.Thread(target=self._convert_files, daemon=True).start()
-        except Exception as e:
-            self.q.put(f"ERROR 开始转换时出错: {e}")
-
-    def _convert_files(self):
-        """在后台线程中执行文件转换"""
-        try:
-            # 获取设置
+            # 获取转换参数
             output_format = self.output_format.get()
             quality = self.quality_var.get()
             webp_compression = self.webp_compression.get()
-            output_dir = self.output_dir_var.get().strip()
+            png3 = getattr(self, 'png3_var', tk.BooleanVar(value=False)).get()
+            process_same = getattr(self, 'process_same_var', tk.BooleanVar(value=False)).get()
             
-            # 模拟转换过程
-            total_files = len(self.src_file_list.get_children())
-            for i in range(total_files):
-                # 模拟进度更新
-                progress = (i + 1) / total_files * 100
-                self.root.after(0, lambda p=progress: self.progress_var.set(p))
+            # 处理ICO特定参数
+            ico_sizes = []
+            square_mode = ""
+            if output_format == "ico":
+                # 获取常用尺寸
+                if hasattr(self, 'ico_size_vars'):
+                    for size, var in self.ico_size_vars.items():
+                        if var.get():
+                            ico_sizes.append(size)
                 
-                # 获取文件名
-                item = self.src_file_list.get_children()[i]
+                # 获取自定义尺寸
+                if hasattr(self, 'ico_sizes_var'):
+                    custom_sizes = self.ico_sizes_var.get().strip()
+                    if custom_sizes:
+                        try:
+                            for size_str in custom_sizes.split(","):
+                                size = int(size_str.strip())
+                                if size > 0 and size <= 256 and size not in ico_sizes:
+                                    ico_sizes.append(size)
+                        except ValueError:
+                            self.q.put(f"WARNING 自定义ICO尺寸格式无效，将忽略")
+                
+                if not ico_sizes:
+                    ico_sizes = [16, 32, 48, 64]
+                    self.q.put(f"WARNING 未选择任何ICO尺寸，将使用默认尺寸")
+                
+                if hasattr(self, 'ico_square_mode'):
+                    square_mode = self.ico_square_mode.get()
+            
+            # 启动转换线程
+            threading.Thread(target=self._convert_files, 
+                            args=(output_format, quality, webp_compression, output_dir, png3, process_same, ico_sizes, square_mode), 
+                            daemon=True).start()
+        except Exception as e:
+            self.q.put(f"ERROR 开始转换时出错: {e}")
+
+    def _convert_files(self, output_format, quality, webp_compression, output_dir, png3, process_same, ico_sizes, square_mode):
+        """在后台线程中执行文件转换"""
+        try:
+            # 获取源文件列表
+            file_items = self.src_file_list.get_children()
+            total_files = len(file_items)
+            success_count = 0
+            fail_count = 0
+            
+            for i, item in enumerate(file_items):
+                # 获取文件名和路径
                 filename = self.src_file_list.item(item, 'values')[0]
                 
-                # 模拟转换
-                time.sleep(0.1)  # 模拟处理时间
+                # 使用iid作为完整路径
+                file_path = item
                 
-                # 记录日志
-                self.q.put(f"LOG\tCONVERT\t{filename}\t{os.path.splitext(filename)[0]}.{output_format}\t转换成功")
+                try:
+                    # 生成输出文件路径
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    output_path = os.path.join(output_dir, f"{base_name}.{output_format}")
+                    
+                    # 检查是否是同格式且不需要处理
+                    original_ext = os.path.splitext(file_path)[1].lower()[1:]
+                    if original_ext == output_format and not process_same:
+                        self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t跳过(同格式)")
+                        continue
+                    
+                    # 调用实际的转换函数
+                    result = convert_one(
+                        file_path, 
+                        output_path, 
+                        output_format, 
+                        quality=quality,
+                        png3=png3,
+                        ico_sizes=ico_sizes if output_format == "ico" else None,
+                        square_mode=square_mode if output_format == "ico" else None,
+                        webp_compression=webp_compression
+                    )
+                    
+                    # 更新进度
+                    progress = (i + 1) / total_files * 100
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                    
+                    # 获取输出文件大小
+                    if os.path.exists(output_path):
+                        output_size = os.path.getsize(output_path)
+                        original_size = os.path.getsize(file_path)
+                        size_ratio = (1 - output_size / original_size) * 100 if original_size > 0 else 0
+                        
+                        if result:
+                            self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换成功({_fmt_size(original_size)} -> {_fmt_size(output_size)}, {size_ratio:.1f}% 减小)")
+                            success_count += 1
+                        else:
+                            self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换失败")
+                            fail_count += 1
+                    else:
+                        self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换失败(输出文件不存在)")
+                        fail_count += 1
+                except Exception as e:
+                    self.q.put(f"LOG\tCONVERT\t{file_path}\t\t转换失败: {str(e)}")
+                    fail_count += 1
+                    
+                    # 更新进度
+                    progress = (i + 1) / total_files * 100
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
             
             # 完成转换
-            self.root.after(0, lambda: self.status_var.set(f"转换完成，共处理 {total_files} 个文件"))
+            self.root.after(0, lambda: self.status_var.set(f"转换完成: 成功{success_count}个，失败{fail_count}个"))
         except Exception as e:
             self.q.put(f"ERROR 转换过程中出错: {e}")
             self.root.after(0, lambda: self.status_var.set(f"转换失败: {e}"))
