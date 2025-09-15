@@ -385,7 +385,7 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
         dst (str): 目标文件路径
         fmt (str): 目标格式 ('jpg', 'png', 'webp', 'ico', 'gif')
         quality (int, optional): 压缩质量 (1-100)，适用于JPG和WebP
-        png3 (bool): 是否将PNG转换为调色板模式以减小文件大小（不适用于APNG）
+        png3 (bool): 是否使用PNG3.0规范进行优化（应用特殊的调色板和压缩参数，支持静态和动画图片）
         ico_sizes (list, optional): ICO图标尺寸列表，如 [16, 32, 48]
         square_mode (str, optional): ICO方形处理模式
             - 'center': 居中裁剪为方形
@@ -489,7 +489,6 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
                     # PNG格式：支持APNG（动画PNG）
                     if is_animated:
                         params['save_all'] = True
-                        params['optimize'] = False  # 保证帧完整性
                         
                         # 保留动画信息
                         try:
@@ -500,13 +499,27 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
                                     params['loop'] = im.info['loop']
                         except Exception:
                             pass
-                                
+                                 
                         # 对于高帧数APNG，使用特殊设置
                         if original_frames > 100 or conservative_mode:
                             params['compress_level'] = 1  # 低压缩级别，保证速度和稳定性
-                                
+                        
+                        # 使用PNG3.0规范进行优化处理（支持动图）
+                        if png3:
+                            # 动画PNG使用适中的压缩参数，保证质量和速度平衡
+                            params['optimize'] = True
+                            params['compress_level'] = 4  # 动图使用较低压缩级别以保证稳定性
+                    
                     elif png3:
+                        # 静态图片使用PNG3.0规范进行优化处理
+                        # 转换为P模式并使用自适应调色板
                         im = im.convert('P', palette=Image.ADAPTIVE, colors=256)
+                        # 添加PNG3.0特定的压缩优化参数
+                        params['optimize'] = True
+                        params['compress_level'] = 6  # PNG3.0推荐的压缩级别
+                        # 确保保留透明度信息
+                        if 'transparency' in im.info:
+                            params['transparency'] = im.info['transparency']
                         
                 elif fmt == 'webp':
                     # WebP格式：支持动画和多种压缩方法

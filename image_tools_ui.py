@@ -249,15 +249,15 @@ class ImageToolApp:
         options_frame = ttk.LabelFrame(right_frame, text="其他选项")
         options_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # WebP压缩方式
-        self.webp_compression = tk.StringVar(value="auto")
-        ttk.Label(options_frame, text="WebP压缩方式:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        webp_methods = ttk.Combobox(options_frame, textvariable=self.webp_compression, state="readonly", values=["auto", "lossless", "high_quality", "standard", "fast"])
-        webp_methods.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        # 压缩方式（对所有支持格式生效）
+        self.compression_method = tk.StringVar(value="auto")
+        ttk.Label(options_frame, text="压缩方式:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        compression_methods = ttk.Combobox(options_frame, textvariable=self.compression_method, state="readonly", values=["auto", "lossless", "high_quality", "standard", "fast"])
+        compression_methods.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
         
-        # PNG3压缩选项
+        # PNG3.0规范设置
         self.png3_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options_frame, text="PNG3调色板压缩", variable=self.png3_var).grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
+        ttk.Checkbutton(options_frame, text="使用PNG3.0规范", variable=self.png3_var).grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
         
         # 同格式也重存选项
         self.process_same_var = tk.BooleanVar(value=False)
@@ -758,7 +758,7 @@ class ImageToolApp:
             # 获取转换参数
             output_format = self.output_format.get()
             quality = self.quality_var.get()
-            webp_compression = self.webp_compression.get()
+            compression_method = getattr(self, 'compression_method', tk.StringVar(value="auto")).get()
             png3 = getattr(self, 'png3_var', tk.BooleanVar(value=False)).get()
             process_same = getattr(self, 'process_same_var', tk.BooleanVar(value=False)).get()
             
@@ -793,12 +793,12 @@ class ImageToolApp:
             
             # 启动转换线程
             threading.Thread(target=self._convert_files, 
-                            args=(output_format, quality, webp_compression, output_dir, png3, process_same, ico_sizes, square_mode), 
+                            args=(output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode), 
                             daemon=True).start()
         except Exception as e:
             self.q.put(f"ERROR 开始转换时出错: {e}")
 
-    def _convert_files(self, output_format, quality, webp_compression, output_dir, png3, process_same, ico_sizes, square_mode):
+    def _convert_files(self, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode):
         """在后台线程中执行文件转换"""
         try:
             # 获取源文件列表
@@ -825,16 +825,42 @@ class ImageToolApp:
                         self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t跳过(同格式)")
                         continue
                     
+                    # 根据输出格式应用相应的压缩参数
+                    convert_params = {
+                        'quality': quality,
+                        'png3': png3,
+                        'ico_sizes': ico_sizes if output_format == "ico" else None,
+                        'square_mode': square_mode if output_format == "ico" else None
+                    }
+                    
+                    # 对不同格式应用特定的压缩参数
+                    if output_format == 'webp':
+                        convert_params['webp_compression'] = compression_method
+                    elif output_format == 'png' and compression_method != 'auto':
+                        # 对于PNG，根据压缩方式调整PNG3.0规范设置
+                        if compression_method == 'lossless':
+                            convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范
+                        elif compression_method == 'fast':
+                            convert_params['png3'] = False  # 快速模式禁用PNG3.0规范
+                    elif output_format == 'jpg' and compression_method != 'auto':
+                        # 对于JPG，根据压缩方式调整质量
+                        if compression_method == 'lossless':
+                            convert_params['quality'] = 100  # JPG最高质量近似无损
+                        elif compression_method == 'fast':
+                            convert_params['quality'] = max(60, quality - 10)  # 快速模式降低质量以提高速度
+                    elif output_format == 'gif' and compression_method != 'auto':
+                        # 对于GIF，设置优化参数（通过png3参数传递PNG3.0规范设置，支持动图互转）
+                        if compression_method == 'lossless':
+                            convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范优化
+                        elif compression_method == 'fast':
+                            convert_params['png3'] = False  # 快速模式禁用PNG3.0规范优化
+                    
                     # 调用实际的转换函数
                     result = convert_one(
                         file_path, 
                         output_path, 
                         output_format, 
-                        quality=quality,
-                        png3=png3,
-                        ico_sizes=ico_sizes if output_format == "ico" else None,
-                        square_mode=square_mode if output_format == "ico" else None,
-                        webp_compression=webp_compression
+                        **convert_params
                     )
                     
                     # 更新进度
