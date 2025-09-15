@@ -1744,6 +1744,82 @@ class ImageToolApp:
 		# 默认序号宽度 3
 		self.index_width_var=tk.IntVar(value=3)  # 0=不补零
 		self.overwrite_var=tk.StringVar(value=_rev_map(OVERWRITE_MAP)['overwrite'])
+		
+		# 加载用户保存的全局默认设置
+		try:
+			import json
+			import os
+			import os.path
+			
+			# 获取应用数据目录和配置文件路径
+			app_data_dir = os.path.join(os.path.expanduser("~"), ".aiipd")
+			config_path = os.path.join(app_data_dir, "global_defaults.json")
+			
+			# 尝试加载全局配置文件
+			if os.path.exists(config_path):
+				with open(config_path, 'r', encoding='utf-8') as f:
+					config = json.load(f)
+					
+					# 应用重命名设置
+					if 'rename' in config:
+						rename_config = config['rename']
+						if 'pattern' in rename_config:
+							self.pattern_var.set(rename_config['pattern'])
+						if 'start' in rename_config:
+							self.start_var.set(rename_config['start'])
+						if 'step' in rename_config:
+							self.step_var.set(rename_config['step'])
+						if 'index_width' in rename_config:
+							self.index_width_var.set(rename_config['index_width'])
+						if 'overwrite' in rename_config:
+							self.overwrite_var.set(rename_config['overwrite'])
+					
+					# 应用分类设置
+					if 'classification' in config:
+						class_config = config['classification']
+						if 'shape_tolerance' in class_config:
+							self.shape_tolerance_var.set(class_config['shape_tolerance'])
+						if 'shape_square_name' in class_config:
+							self.shape_square_name.set(class_config['shape_square_name'])
+						if 'shape_horizontal_name' in class_config:
+							self.shape_horizontal_name.set(class_config['shape_horizontal_name'])
+						if 'shape_vertical_name' in class_config:
+							self.shape_vertical_name.set(class_config['shape_vertical_name'])
+						if 'ratio_tolerance' in class_config:
+							self.ratio_tol_var.set(class_config['ratio_tolerance'])
+						if 'ratio_custom' in class_config:
+							self.ratio_custom_var.set(class_config['ratio_custom'])
+						if 'ratio_snap' in class_config:
+							self.ratio_snap_var.set(class_config['ratio_snap'])
+					
+					# 应用转换设置
+					if 'convert' in config:
+						convert_config = config['convert']
+						if 'format' in convert_config:
+							self.fmt_var.set(convert_config['format'])
+						if 'quality' in convert_config:
+							self.quality_var.set(convert_config['quality'])
+					
+					# 应用去重设置
+					if 'dedupe' in config:
+						dedupe_config = config['dedupe']
+						if 'keep' in dedupe_config:
+							self.keep_var.set(dedupe_config['keep'])
+						if 'action' in dedupe_config:
+							self.dedup_action_var.set(dedupe_config['action'])
+						if 'threshold' in dedupe_config:
+							self.threshold_var.set(dedupe_config['threshold'])
+					
+					# 应用全局设置
+					if 'global' in config:
+						global_config = config['global']
+						if 'workers' in global_config:
+							self.workers_var.set(global_config['workers'])
+						if 'global_remove_src' in global_config:
+							self.global_remove_src.set(global_config['global_remove_src'])
+		except Exception as e:
+			# 加载失败时静默处理，保持默认值
+			pass
 		ttk.Label(rename,text='模式').grid(row=0,column=0,sticky='e')
 		ent_pattern=ttk.Entry(rename,textvariable=self.pattern_var,width=42); ent_pattern.grid(row=0,column=1,sticky='w',padx=(0,8))
 		ttk.Label(rename,text='起始').grid(row=0,column=2,sticky='e')
@@ -1755,32 +1831,97 @@ class ImageToolApp:
 		ttk.Label(rename,text='覆盖策略').grid(row=0,column=8,sticky='e')
 		cb_over=ttk.Combobox(rename,textvariable=self.overwrite_var,values=list(OVERWRITE_MAP.keys()),width=12,state='readonly'); cb_over.grid(row=0,column=9,sticky='w')
 		for i in range(10): rename.columnconfigure(i,weight=0)
+		
+		# 重命名预设按钮行 - 第一行
+		preset_rename_frame1=ttk.Frame(rename)
+		preset_rename_frame1.grid(row=1,column=0,columnspan=10,sticky='w',pady=(4,2))
+		preset_patterns_common=[
+			('序号在前', '{index}_{name}.{fmt}'),
+			('序号在后', '{name}_{index}.{fmt}'),
+			('纯序号', '{index}.{fmt}'),
+			('原文件名', '{name}.{fmt}'),
+			('前缀+序号', 'img_{index}.{fmt}'),
+			('比例+序号', '{ratio}_{index}.{fmt}'),
+			('分类+序号', '{ratio}_{name}.{fmt}')
+		]
+		self._rename_preset_buttons=[]
+		for name, pattern in preset_patterns_common:
+			btn=ttk.Button(preset_rename_frame1,text=name,width=10,command=lambda p=pattern: self.pattern_var.set(p))
+			btn.pack(side='left',padx=2)
+			self._rename_preset_buttons.append(btn)
+		
+		# 重命名预设按钮行 - 第二行 (日期和特殊格式)
+		preset_rename_frame2=ttk.Frame(rename)
+		preset_rename_frame2.grid(row=2,column=0,columnspan=10,sticky='w',pady=(2,2))
+		preset_patterns_date=[
+			('日期+序号', '{date}_{index}.{fmt}'),
+			('序号+日期', '{index}_{date}.{fmt}'),
+			('日期+名称', '{date}_{name}.{fmt}'),
+			('时间戳', '{timestamp}.{fmt}'),
+			('前缀+日期', 'img_{date}.{fmt}')
+		]
+		for name, pattern in preset_patterns_date:
+			btn=ttk.Button(preset_rename_frame2,text=name,width=12,command=lambda p=pattern: self.pattern_var.set(p))
+			btn.pack(side='left',padx=2)
+			self._rename_preset_buttons.append(btn)
+		
+		# 重置和高级按钮
+		# 在重命名区域中保留原有的重命名专用重置按钮
+		preset_rename_frame3=ttk.Frame(rename)
+		preset_rename_frame3.grid(row=3,column=0,columnspan=10,sticky='w',pady=(2,4))
+		self.btn_reset_rename=ttk.Button(preset_rename_frame3,text='重置重命名',width=10,
+			command=lambda: [self.pattern_var.set('{name}_{index}.{fmt}'),
+			                self.start_var.set(1),
+			                self.step_var.set(1),
+			                self.index_width_var.set(3),
+			                self.overwrite_var.set(_rev_map(OVERWRITE_MAP)['overwrite'])])
+		self.btn_reset_rename.pack(side='left',padx=2)
+
+		# 全局设置管理按钮
+		global_settings_frame=ttk.Frame(self.left_frame)
+		global_settings_frame.pack(fill='x',pady=(0,6))
+		btn_reset_all=ttk.Button(global_settings_frame,text='重置为默认',width=12,
+			command=self._reset_all_to_default)
+		btn_reset_all.pack(side='right',padx=(0,4))
+		
+		btn_set_global_defaults=ttk.Button(global_settings_frame,text='设置为默认',width=12,
+			command=self._set_current_as_default)
+		btn_set_global_defaults.pack(side='right',padx=(0,4))
+
 		# 进度状态显示
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,6))
 		self.progress=ttk.Progressbar(self.left_frame,maximum=100); self.progress.pack(fill='x',pady=(0,4))
 		self.status_var=tk.StringVar(value='就绪'); ttk.Label(self.left_frame,textvariable=self.status_var,foreground='blue').pack(fill='x')
-		
+			
 		# 设置变量跟踪
 		self.classify_ratio_var.trace_add('write', lambda *a: self._on_classify_ratio_changed())
 		self.classify_shape_var.trace_add('write', lambda *a: self._on_classify_shape_changed())
 		self.dedup_action_var.trace_add('write', lambda *a: self._update_states())
 		self.fmt_var.trace_add('write', lambda *a: self._update_states())
-		
+			
 		# 基本变量跟踪
 		self.enable_convert.trace_add('write', lambda *a: self._update_states())
 		self.enable_rename.trace_add('write', lambda *a: self._update_states())
 		self.enable_dedupe.trace_add('write', lambda *a: self._update_states())
-		
+
 		# 原始日志缓存 (用于筛选)
 		self._raw_logs=[]  # list of tuples (stage, src_full, dst_full, info, display_values, tags)
 		
-		# 记录基础窗口最小尺寸
+		# 记录基础窗口最小尺寸，并优化窗口大小以容纳所有控件
 		try:
-			self.root.update_idletasks(); self._base_win_width=self.root.winfo_width(); self._base_win_height=self.root.winfo_height()
-			self._min_window_width = self._base_win_width  # 设置最小窗口宽度
+			self.root.update_idletasks(); 
+			self._base_win_width=self.root.winfo_width(); 
+			self._base_win_height=self.root.winfo_height()
+			# 确保窗口宽度足够大以容纳所有控件，特别是新添加的重命名预设按钮和额外的行
+			self._min_window_width = max(self._base_win_width, 1000)  # 设置最小窗口宽度
+			self._min_window_height = max(self._base_win_height, 700)  # 增加最小窗口高度以容纳额外的预设按钮行
 		except Exception:
-			self._base_win_width=900; self._base_win_height=600
-			self._min_window_width = 900  # 默认最小宽度
+			self._base_win_width=1000; self._base_win_height=700  # 增加默认窗口大小
+			self._min_window_width = 1000  # 默认最小宽度
+			self._min_window_height = 700  # 默认最小高度
+		
+		# 设置窗口最小尺寸
+		self.root.minsize(self._min_window_width, self._min_window_height)
 		# 捕获日志区初始高度用于锁定
 		self._log_fixed_height=None
 		self.root.after(400,self._capture_log_height)
@@ -4103,6 +4244,108 @@ class ImageToolApp:
 						self.paned.paneconfigure(self.upper_frame,minsize=h)
 		except Exception:
 			pass
+		
+	def _set_current_as_default(self):
+		"""将当前的所有设置保存为全局默认值"""
+		try:
+			# 保存当前设置到一个配置文件中
+			import json
+			import os
+			
+			# 获取应用数据目录
+			app_data_dir = os.path.join(os.path.expanduser("~"), ".aiipd")
+			os.makedirs(app_data_dir, exist_ok=True)
+			config_path = os.path.join(app_data_dir, "global_defaults.json")
+			
+			# 收集当前设置
+			config = {
+				# 重命名设置
+				"rename": {
+					"pattern": self.pattern_var.get(),
+					"start": self.start_var.get(),
+					"step": self.step_var.get(),
+					"index_width": self.index_width_var.get(),
+					"overwrite": self.overwrite_var.get()
+				},
+				# 分类设置
+				"classification": {
+					"shape_tolerance": self.shape_tolerance_var.get(),
+					"shape_square_name": self.shape_square_name.get(),
+					"shape_horizontal_name": self.shape_horizontal_name.get(),
+					"shape_vertical_name": self.shape_vertical_name.get(),
+					"ratio_tolerance": self.ratio_tol_var.get(),
+					"ratio_custom": self.ratio_custom_var.get(),
+					"ratio_snap": self.ratio_snap_var.get()
+				},
+				# 转换设置
+				"convert": {
+					"format": self.fmt_var.get(),
+					"quality": self.quality_var.get()
+				},
+				# 去重设置
+				"dedupe": {
+					"keep": self.keep_var.get(),
+					"action": self.dedup_action_var.get(),
+					"threshold": self.threshold_var.get()
+				},
+				# 全局设置
+				"global": {
+					"workers": self.workers_var.get(),
+					"global_remove_src": self.global_remove_src.get()
+				}
+			}
+			
+			# 保存配置
+			with open(config_path, 'w', encoding='utf-8') as f:
+				json.dump(config, f, ensure_ascii=False, indent=2)
+			
+			# 显示成功消息
+			self.status_var.set(f"成功保存全局默认设置到 {config_path}")
+			self.q.put(f"INFO 全局设置已保存为默认值")
+		except Exception as e:
+			# 显示错误消息
+			self.status_var.set(f"保存默认设置失败: {str(e)}")
+			self.q.put(f"ERROR 保存默认设置失败: {str(e)}")
+			
+	def _reset_all_to_default(self):
+		"""重置所有设置为应用程序默认值"""
+		try:
+			# 重命名设置重置
+			self.pattern_var.set('{name}_{index}.{fmt}')
+			self.start_var.set(1)
+			self.step_var.set(1)
+			self.index_width_var.set(3)
+			self.overwrite_var.set(_rev_map(OVERWRITE_MAP)['overwrite'])
+			
+			# 分类设置重置
+			self.shape_tolerance_var.set(0.15)
+			self.shape_square_name.set('zfx')
+			self.shape_horizontal_name.set('hp')
+			self.shape_vertical_name.set('sp')
+			self.ratio_tol_var.set(0.15)
+			self.ratio_custom_var.set('16:9,3:2,4:3,1:1,21:9')
+			self.ratio_snap_var.set(False)
+			
+			# 转换设置重置
+			self.fmt_var.set(_rev_map(FMT_MAP)['webp'])
+			self.quality_var.set(100)
+			
+			# 去重设置重置
+			self.keep_var.set(_rev_map(KEEP_MAP)['largest'])
+			self.dedup_action_var.set(_rev_map(ACTION_MAP)['delete'])
+			self.threshold_var.set(3)
+			
+			# 全局设置重置
+			self.workers_var.set(16)
+			self.global_remove_src.set(False)
+			
+			# 显示成功消息
+			self.status_var.set("所有设置已重置为默认值")
+			self.q.put("INFO 所有设置已重置为默认值")
+		except Exception as e:
+			# 显示错误消息
+			self.status_var.set(f"重置设置失败: {str(e)}")
+			self.q.put(f"ERROR 重置设置失败: {str(e)}")
 
 	def _log_row_visible(self,stage:str,info:str,vals:tuple)->bool:
 		stage_map={'DEDUP':'去重','CONVERT':'转换','RENAME':'重命名','CLASSIFY':'分类'}
@@ -4314,6 +4557,21 @@ class ImageToolApp:
 						ch.configure(state='normal' if enabled else 'disabled')
 				except Exception:
 					pass
+			
+		# 确保所有预设按钮状态正确 (即使在嵌套框架中)
+		if hasattr(self, '_rename_preset_buttons'):
+			for btn in self._rename_preset_buttons:
+				try:
+					btn.configure(state='normal' if self.enable_rename.get() else 'disabled')
+				except Exception:
+					pass
+		
+		# 控制"重置重命名"按钮状态
+		if hasattr(self, 'btn_reset_rename'):
+			try:
+				self.btn_reset_rename.configure(state='normal' if self.enable_rename.get() else 'disabled')
+			except Exception:
+				pass
 		need_move=ACTION_MAP.get(self.dedup_action_var.get(),'list')=='move' and self.enable_dedupe.get()
 		need_delete=ACTION_MAP.get(self.dedup_action_var.get(),'list')=='delete'
 		mv_st='normal' if need_move else 'disabled'
