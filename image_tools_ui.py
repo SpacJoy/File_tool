@@ -18,6 +18,7 @@ import queue
 import re
 import time
 import warnings
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 尝试导入Tkinter库
@@ -122,6 +123,7 @@ class ImageToolApp:
             'dedupe_removed': 0,
             'warnings_count': 0,
             'errors_count': 0,
+            'success_count': 0,  # 新增：成功处理的文件数
             'file_formats': {},  # 格式分布统计
             'operations': [],  # 执行的操作列表
             'total_size_before': 0,
@@ -798,100 +800,240 @@ class ImageToolApp:
         except Exception as e:
             self.q.put(f"ERROR 开始转换时出错: {e}")
 
-    def _convert_files(self, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode):
-        """在后台线程中执行文件转换"""
+    def _reset_stats(self):
+        """重置统计信息"""
+        self.stats = {
+            'start_time': 0,
+            'end_time': 0,
+            'total_files': 0,
+            'success_count': 0,
+            'fail_count': 0,
+            'total_size_before': 0,
+            'total_size_after': 0
+        }
+
+    def _convert_single_file(self, file_path, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode, i, total_files):
+        """转换单个文件的辅助函数，用于多线程处理"""
         try:
+            # 生成输出文件路径
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            output_path = os.path.join(output_dir, f"{base_name}.{output_format}")
+            
+            # 检查是否是同格式且不需要处理
+            original_ext = os.path.splitext(file_path)[1].lower()[1:]
+            if original_ext == output_format and not process_same:
+                self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t跳过(同格式)")
+                return False, 0, 0, "跳过(同格式)"
+            
+            # 根据输出格式应用相应的压缩参数
+            convert_params = {
+                'quality': quality,
+                'png3': png3,
+                'ico_sizes': ico_sizes if output_format == "ico" else None,
+                'square_mode': square_mode if output_format == "ico" else None
+            }
+            
+            # 对不同格式应用特定的压缩参数
+            if output_format == 'webp':
+                convert_params['webp_compression'] = compression_method
+            elif output_format == 'png' and compression_method != 'auto':
+                # 对于PNG，根据压缩方式调整PNG3.0规范设置
+                if compression_method == 'lossless':
+                    convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范
+                elif compression_method == 'fast':
+                    convert_params['png3'] = False  # 快速模式禁用PNG3.0规范
+            elif output_format == 'jpg' and compression_method != 'auto':
+                # 对于JPG，根据压缩方式调整质量
+                if compression_method == 'lossless':
+                    convert_params['quality'] = 100  # JPG最高质量近似无损
+                elif compression_method == 'fast':
+                    convert_params['quality'] = max(60, quality - 10)  # 快速模式降低质量以提高速度
+            elif output_format == 'gif' and compression_method != 'auto':
+                # 对于GIF，设置优化参数（通过png3参数传递PNG3.0规范设置，支持动图互转）
+                if compression_method == 'lossless':
+                    convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范优化
+                elif compression_method == 'fast':
+                    convert_params['png3'] = False  # 快速模式禁用PNG3.0规范优化
+            
+            # 调用实际的转换函数
+            result = convert_one(
+                file_path, 
+                output_path, 
+                output_format, 
+                **convert_params
+            )
+            
+            # 获取输出文件大小
+            original_size = 0
+            output_size = 0
+            if os.path.exists(file_path):
+                original_size = os.path.getsize(file_path)
+            
+            if os.path.exists(output_path):
+                output_size = os.path.getsize(output_path)
+                size_ratio = (1 - output_size / original_size) * 100 if original_size > 0 else 0
+                
+                if result:
+                    status_msg = f"转换成功({_fmt_size(original_size)} -> {_fmt_size(output_size)}, {size_ratio:.1f}% 减小)"
+                    return True, original_size, output_size, status_msg
+                else:
+                    return False, 0, 0, "转换失败"
+            else:
+                return False, 0, 0, "转换失败(输出文件不存在)"
+        except Exception as e:
+            return False, 0, 0, f"转换失败: {str(e)}"
+
+    def _convert_files(self, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode):
+        """在后台线程中执行文件转换，支持多线程处理"""
+        try:
+            # 重置统计信息
+            self._reset_stats()
+            
             # 获取源文件列表
             file_items = self.src_file_list.get_children()
             total_files = len(file_items)
-            success_count = 0
-            fail_count = 0
+            self.stats['total_files'] = total_files
+            self.stats['start_time'] = time.time()
             
-            for i, item in enumerate(file_items):
-                # 获取文件名和路径
-                filename = self.src_file_list.item(item, 'values')[0]
+            # 初始化进度条
+            self.root.after(0, lambda: self.progress_var.set(0))
+            self.root.after(0, lambda: self.status_var.set(f"准备转换: 共{total_files}个文件"))
+            
+            # 根据文件数量决定是否使用多线程
+            use_multithreading = total_files > 5
+            max_workers = min(4, total_files)  # 最大线程数为4
+            
+            if use_multithreading:
+                # 使用多线程处理
+                self.q.put(f"LOG\tSYSTEM\t使用多线程模式: {max_workers}个线程")
                 
-                # 使用iid作为完整路径
-                file_path = item
+                # 统计变量（线程安全的计数器）
+                success_count = Counter()
+                fail_count = Counter()
+                total_size_before = Counter()
+                total_size_after = Counter()
                 
-                try:
-                    # 生成输出文件路径
+                # 使用ThreadPoolExecutor处理文件
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # 提交所有转换任务
+                    futures = {
+                        executor.submit(
+                            self._convert_single_file,
+                            item, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode,
+                            i, total_files
+                        ): (item, i) for i, item in enumerate(file_items)
+                    }
+                    
+                    # 处理完成的任务
+                    processed = 0
+                    for future in as_completed(futures):
+                        item, i = futures[future]
+                        file_path = item
+                        filename = self.src_file_list.item(item, 'values')[0]
+                        
+                        try:
+                            # 获取转换结果
+                            success, orig_size, out_size, status = future.result()
+                            
+                            # 生成输出文件路径用于日志
+                            base_name = os.path.splitext(os.path.basename(file_path))[0]
+                            output_path = os.path.join(output_dir, f"{base_name}.{output_format}")
+                            
+                            # 记录结果
+                            self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t{status}")
+                            
+                            # 更新统计信息
+                            if success:
+                                success_count.update([1])
+                                total_size_before.update([orig_size])
+                                total_size_after.update([out_size])
+                            else:
+                                fail_count.update([1])
+                            
+                            # 更新进度
+                            processed += 1
+                            progress = processed / total_files * 100
+                            self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                            
+                        except Exception as e:
+                            self.q.put(f"LOG\tCONVERT\t{file_path}\t\t处理异常: {str(e)}")
+                            fail_count.update([1])
+                            
+                            # 更新进度
+                            processed += 1
+                            progress = processed / total_files * 100
+                            self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                
+                # 更新最终统计
+                self.stats['success_count'] = success_count[1]
+                self.stats['fail_count'] = fail_count[1]
+                self.stats['total_size_before'] = total_size_before[0]
+                self.stats['total_size_after'] = total_size_after[0]
+            else:
+                # 单线程处理
+                self.q.put(f"LOG\tSYSTEM\t使用单线程模式")
+                
+                # 初始化计数器
+                success_count = 0
+                fail_count = 0
+                total_size_before = 0
+                total_size_after = 0
+                
+                for i, item in enumerate(file_items):
+                    # 获取文件名和路径
+                    file_path = item
+                    
+                    # 转换单个文件
+                    success, orig_size, out_size, status = self._convert_single_file(
+                        file_path, output_format, quality, compression_method, output_dir, png3, process_same, ico_sizes, square_mode,
+                        i, total_files
+                    )
+                    
+                    # 生成输出文件路径用于日志
                     base_name = os.path.splitext(os.path.basename(file_path))[0]
                     output_path = os.path.join(output_dir, f"{base_name}.{output_format}")
                     
-                    # 检查是否是同格式且不需要处理
-                    original_ext = os.path.splitext(file_path)[1].lower()[1:]
-                    if original_ext == output_format and not process_same:
-                        self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t跳过(同格式)")
-                        continue
+                    # 记录结果
+                    self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t{status}")
                     
-                    # 根据输出格式应用相应的压缩参数
-                    convert_params = {
-                        'quality': quality,
-                        'png3': png3,
-                        'ico_sizes': ico_sizes if output_format == "ico" else None,
-                        'square_mode': square_mode if output_format == "ico" else None
-                    }
-                    
-                    # 对不同格式应用特定的压缩参数
-                    if output_format == 'webp':
-                        convert_params['webp_compression'] = compression_method
-                    elif output_format == 'png' and compression_method != 'auto':
-                        # 对于PNG，根据压缩方式调整PNG3.0规范设置
-                        if compression_method == 'lossless':
-                            convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范
-                        elif compression_method == 'fast':
-                            convert_params['png3'] = False  # 快速模式禁用PNG3.0规范
-                    elif output_format == 'jpg' and compression_method != 'auto':
-                        # 对于JPG，根据压缩方式调整质量
-                        if compression_method == 'lossless':
-                            convert_params['quality'] = 100  # JPG最高质量近似无损
-                        elif compression_method == 'fast':
-                            convert_params['quality'] = max(60, quality - 10)  # 快速模式降低质量以提高速度
-                    elif output_format == 'gif' and compression_method != 'auto':
-                        # 对于GIF，设置优化参数（通过png3参数传递PNG3.0规范设置，支持动图互转）
-                        if compression_method == 'lossless':
-                            convert_params['png3'] = True  # 无损压缩时启用PNG3.0规范优化
-                        elif compression_method == 'fast':
-                            convert_params['png3'] = False  # 快速模式禁用PNG3.0规范优化
-                    
-                    # 调用实际的转换函数
-                    result = convert_one(
-                        file_path, 
-                        output_path, 
-                        output_format, 
-                        **convert_params
-                    )
-                    
-                    # 更新进度
-                    progress = (i + 1) / total_files * 100
-                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
-                    
-                    # 获取输出文件大小
-                    if os.path.exists(output_path):
-                        output_size = os.path.getsize(output_path)
-                        original_size = os.path.getsize(file_path)
-                        size_ratio = (1 - output_size / original_size) * 100 if original_size > 0 else 0
-                        
-                        if result:
-                            self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换成功({_fmt_size(original_size)} -> {_fmt_size(output_size)}, {size_ratio:.1f}% 减小)")
-                            success_count += 1
-                        else:
-                            self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换失败")
-                            fail_count += 1
+                    # 更新统计信息
+                    if success:
+                        success_count += 1
+                        total_size_before += orig_size
+                        total_size_after += out_size
                     else:
-                        self.q.put(f"LOG\tCONVERT\t{file_path}\t{output_path}\t转换失败(输出文件不存在)")
                         fail_count += 1
-                except Exception as e:
-                    self.q.put(f"LOG\tCONVERT\t{file_path}\t\t转换失败: {str(e)}")
-                    fail_count += 1
                     
                     # 更新进度
                     progress = (i + 1) / total_files * 100
                     self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                
+                # 更新最终统计
+                self.stats['success_count'] = success_count
+                self.stats['fail_count'] = fail_count
+                self.stats['total_size_before'] = total_size_before
+                self.stats['total_size_after'] = total_size_after
+            
+            # 计算总耗时
+            self.stats['end_time'] = time.time()
+            elapsed_time = self.stats['end_time'] - self.stats['start_time']
+            
+            # 计算整体压缩率
+            total_before = self.stats['total_size_before']
+            total_after = self.stats['total_size_after']
+            overall_ratio = (1 - total_after / total_before) * 100 if total_before > 0 else 0
+            
+            # 记录详细统计信息
+            self.q.put(f"LOG\tSTATS\t转换完成\t总文件数: {total_files}\t成功: {self.stats['success_count']}\t失败: {self.stats['fail_count']}")
+            self.q.put(f"LOG\tSTATS\t总大小变化\t{_fmt_size(total_before)} -> {_fmt_size(total_after)}\t减小: {overall_ratio:.1f}%")
+            self.q.put(f"LOG\tSTATS\t耗时: {elapsed_time:.2f}秒\t平均速度: {total_files / elapsed_time:.2f}文件/秒")
             
             # 完成转换
-            self.root.after(0, lambda: self.status_var.set(f"转换完成: 成功{success_count}个，失败{fail_count}个"))
+            status_message = f"转换完成: 成功{self.stats['success_count']}个，失败{self.stats['fail_count']}个，耗时{elapsed_time:.2f}秒"
+            if total_before > 0:
+                status_message += f" ({_fmt_size(total_before)} -> {_fmt_size(total_after)}, 减小{overall_ratio:.1f}%)"
+            
+            self.root.after(0, lambda: self.status_var.set(status_message))
         except Exception as e:
             self.q.put(f"ERROR 转换过程中出错: {e}")
             self.root.after(0, lambda: self.status_var.set(f"转换失败: {e}"))

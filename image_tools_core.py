@@ -420,8 +420,36 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
         # 检查可用内存
         available_memory = psutil.virtual_memory().available
         
-        # 对于大文件（>50MB）或内存不足的情况，启用保守模式
-        conservative_mode = file_size > 50 * 1024 * 1024 or available_memory < 500 * 1024 * 1024
+        # 对于大文件或内存不足的情况，启用保守模式
+        # 根据文件大小动态调整阈值
+        file_size_threshold = 50 * 1024 * 1024  # 默认50MB
+        memory_threshold = 500 * 1024 * 1024    # 默认500MB
+        
+        # 对于超大文件，降低阈值
+        if file_size > 200 * 1024 * 1024:  # 200MB以上的超大文件
+            file_size_threshold = 20 * 1024 * 1024  # 20MB就启用保守模式
+        elif file_size > 100 * 1024 * 1024:  # 100-200MB的大文件
+            file_size_threshold = 30 * 1024 * 1024  # 30MB启用保守模式
+        
+        # 对于内存特别紧张的情况，也降低阈值
+        if available_memory < 200 * 1024 * 1024:  # 可用内存小于200MB
+            memory_threshold = 200 * 1024 * 1024
+            file_size_threshold = 10 * 1024 * 1024
+        
+        conservative_mode = file_size > file_size_threshold or available_memory < memory_threshold
+        
+        # 对于超大文件预先进行特殊处理
+        if file_size > 300 * 1024 * 1024:  # 300MB以上的文件
+            print(f"处理超大文件: {file_size/1024/1024:.1f}MB，可用内存: {available_memory/1024/1024:.1f}MB")
+            # 尝试设置PIL的加载限制
+            if ImageFile:  # 确保ImageFile已导入
+                ImageFile.LOAD_TRUNCATED_IMAGES = True
+                # 设置PIL的内存限制参数
+                try:
+                    # 对于特别大的文件，设置较低的块大小以减少内存占用
+                    ImageFile.MAXBLOCK = 1024 * 1024  # 1MB块大小
+                except (AttributeError, TypeError):
+                    pass
         
         with Image.open(src) as im:
             # 检测动画信息
@@ -497,26 +525,55 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
                                     params['duration'] = im.info['duration']
                                 if 'loop' in im.info:
                                     params['loop'] = im.info['loop']
+                                if 'disposal' in im.info:
+                                    params['disposal'] = im.info['disposal']
+                                if 'background' in im.info:
+                                    params['background'] = im.info['background']
                         except Exception:
                             pass
-                                 
-                        # 对于高帧数APNG，使用特殊设置
-                        if original_frames > 100 or conservative_mode:
-                            params['compress_level'] = 1  # 低压缩级别，保证速度和稳定性
+                                      
+                        # 根据帧数和文件大小优化参数
+                        if original_frames > 200 or (file_size > 10*1024*1024 and original_frames > 50):
+                            # 超大动画：极低压缩以保证速度和稳定性
+                            params['compress_level'] = 1
+                            params['optimize'] = False
+                        elif original_frames > 100 or conservative_mode:
+                            # 大动画：中等压缩
+                            params['compress_level'] = 2
+                            params['optimize'] = False
+                        else:
+                            # 小动画：正常压缩
+                            params['compress_level'] = 3
                         
                         # 使用PNG3.0规范进行优化处理（支持动图）
                         if png3:
                             # 动画PNG使用适中的压缩参数，保证质量和速度平衡
                             params['optimize'] = True
-                            params['compress_level'] = 4  # 动图使用较低压缩级别以保证稳定性
+                            # 根据帧数调整压缩级别
+                            if original_frames > 150:
+                                params['compress_level'] = 3  # 高帧数使用较低压缩
+                            else:
+                                params['compress_level'] = 4  # 一般情况使用中等压缩
                     
                     elif png3:
                         # 静态图片使用PNG3.0规范进行优化处理
                         # 转换为P模式并使用自适应调色板
-                        im = im.convert('P', palette=Image.ADAPTIVE, colors=256)
+                        try:
+                            # 根据图片类型选择最合适的转换方式
+                            if im.mode in ('RGBA', 'LA'):
+                                # 有透明度的图片
+                                im = im.convert('P', palette=Image.ADAPTIVE, colors=256, transparency=im.info.get('transparency'))
+                            else:
+                                # 不透明图片
+                                im = im.convert('P', palette=Image.ADAPTIVE, colors=256)
+                        except Exception:
+                            # 转换失败时回退到原始模式
+                            pass
+                        
                         # 添加PNG3.0特定的压缩优化参数
                         params['optimize'] = True
                         params['compress_level'] = 6  # PNG3.0推荐的压缩级别
+                        params['pnginfo'] = im.info  # 保留原始PNG信息
                         # 确保保留透明度信息
                         if 'transparency' in im.info:
                             params['transparency'] = im.info['transparency']
@@ -624,16 +681,65 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
                                 
                                 # 如果收集的帧数正确，尝试手动保存
                                 if len(frames) == original_frames:
-                                    frames[0].save(
-                                        dst,
-                                        'WEBP',
-                                        save_all=True,
-                                        append_images=frames[1:],
-                                        duration=100,  # 使用固定持续时间
-                                        loop=0,
-                                        lossless=True,
-                                        method=6
-                                    )
+                                    # 对于超高帧数动画，考虑进行帧采样以减少内存使用
+                                    final_frames = frames
+                                    final_durations = durations
+                                    
+                                    # 对于帧数超过300的动画，可以考虑进行适当的采样
+                                    if original_frames > 300 and conservative_mode:
+                                        # 计算采样步长，保持动画流畅性的同时减少帧数
+                                        sample_step = max(1, original_frames // 250)  # 最多保留250帧
+                                        final_frames = frames[::sample_step]
+                                        if durations:
+                                            final_durations = durations[::sample_step]
+                                        print(f"超高帧数动画优化: {original_frames}帧 -> {len(final_frames)}帧")
+                                    
+                                    # 尝试保存为WebP动画
+                                    try:
+                                        final_frames[0].save(
+                                            dst,
+                                            'WEBP',
+                                            save_all=True,
+                                            append_images=final_frames[1:],
+                                            duration=final_durations[0] if final_durations else 100,  # 使用第一帧的持续时间或默认值
+                                            loop=0,
+                                            lossless=True,
+                                            method=6,
+                                            quality=100
+                                        )
+                                    except Exception as inner_e:
+                                        # 如果保存失败，尝试减少帧数或改变参数
+                                        print(f"标准手动帧保存失败: {inner_e}，尝试备用参数...")
+                                        try:
+                                            # 对于大量帧，使用不同的保存策略
+                                            if len(frames) > 200:
+                                                # 降低method值以减少内存使用
+                                                frames[0].save(
+                                                    dst,
+                                                    'WEBP',
+                                                    save_all=True,
+                                                    append_images=frames[1:],
+                                                    duration=50,  # 减少持续时间可能有助于保存
+                                                    loop=0,
+                                                    lossless=True,
+                                                    method=2
+                                                )
+                                            else:
+                                                # 尝试使用稍低的质量
+                                                frames[0].save(
+                                                    dst,
+                                                    'WEBP',
+                                                    save_all=True,
+                                                    append_images=frames[1:],
+                                                    duration=100,
+                                                    loop=0,
+                                                    lossless=False,  # 尝试有损压缩作为最后选择
+                                                    quality=90,
+                                                    method=4
+                                                )
+                                        except Exception as final_e:
+                                            print(f"备用手动帧保存也失败: {final_e}")
+                                            raise final_e
                                     
                                     # 再次验证
                                     with Image.open(dst) as result_im:
@@ -701,8 +807,22 @@ def convert_one(src: str, dst: str, fmt: str, quality: Optional[int] = None,
         # 添加关键的堆栈信息（最后几行）
         tb_lines = traceback.format_exc().strip().split('\n')
         if len(tb_lines) > 2:
-            # 取最后的错误行
-            error_detail += f" | {tb_lines[-2].strip()}"
+            # 取最后的错误行和倒数第二行（上下文更完整）
+            if len(tb_lines) > 3:
+                error_detail += f" | {tb_lines[-3].strip()} | {tb_lines[-2].strip()}"
+            else:
+                error_detail += f" | {tb_lines[-2].strip()}"
+        
+        # 根据不同错误类型提供更具体的提示
+        error_type = type(e).__name__
+        if error_type in ('MemoryError', 'PIL.UnidentifiedImageError', 'IOError', 'OSError'):
+            if 'memory' in str(e).lower():
+                error_detail += " | 提示：尝试减小图片尺寸或关闭其他应用程序释放内存"
+            elif 'unidentified image' in str(e).lower():
+                error_detail += " | 提示：文件可能不是有效的图片格式或已损坏"
+            elif 'permission' in str(e).lower():
+                error_detail += " | 提示：请检查文件和文件夹的访问权限"
+        
         return False, error_detail, None
 
 @dataclass
@@ -737,6 +857,11 @@ def is_animated_image(path: str) -> bool:
     """
     检测图片是否为动图 (GIF, WebP, APNG)
     
+    使用多层次检测确保准确判断：
+    1. 首先检查PIL的is_animated属性
+    2. 尝试seek(1)方法检查是否有多帧
+    3. 对PNG文件进行更精确的APNG检测
+    
     Args:
         path: 图片文件路径
         
@@ -750,26 +875,32 @@ def is_animated_image(path: str) -> bool:
                 return True
             
             # 对于一些较老版本的PIL，手动检查帧数
-            if im.format in ('GIF', 'WEBP'):
-                try:
-                    im.seek(1)  # 尝试移动到第二帧
-                    return True
-                except (AttributeError, EOFError):
-                    pass
+            try:
+                im.seek(1)  # 尝试移动到第二帧
+                im.seek(0)  # 恢复到第一帧
+                return True
+            except (AttributeError, EOFError, IndexError):
+                pass
             
             # 检查PNG是否为APNG (动态PNG)
             if im.format == 'PNG':
-                # APNG会有特殊的chunk标识
-                if hasattr(im, 'info') and 'transparency' in im.info:
-                    # 简单检查，更完整的检查需要解析PNG chunk
-                    try:
-                        frames = list(ImageSequence.Iterator(im))
-                        return len(frames) > 1
-                    except:
-                        pass
+                # 尝试使用ImageSequence来检测多帧
+                try:
+                    frames = list(ImageSequence.Iterator(im))
+                    if len(frames) > 1:
+                        return True
+                except:
+                    pass
+                
+                # 检查info字典中是否有动画相关的关键字段
+                if hasattr(im, 'info'):
+                    # APNG通常会包含这些信息
+                    if any(key in im.info for key in ['duration', 'loop', 'apng', 'disposal']):
+                        return True
             
         return False
     except Exception:
+        # 无法打开文件，假设不是动图
         return False
 
 # 确保PIL库可用的检查函数
