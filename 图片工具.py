@@ -30,6 +30,12 @@ try:
 except Exception:  # pragma: no cover
 	tk = None  # type: ignore
 
+# CustomTkinter (Windows 11 风格)
+try:
+	import customtkinter as ctk  # type: ignore
+except Exception:  # pragma: no cover
+	ctk = None  # type: ignore
+
 try:
 	from PIL import Image, ImageSequence, ImageFile, ImageTk  # type: ignore
 except Exception:  # pragma: no cover
@@ -41,6 +47,285 @@ try:
 	from send2trash import send2trash  # type: ignore
 except Exception:  # pragma: no cover
 	send2trash = None  # type: ignore
+
+
+class CTkLogView:
+	"""基于 CTkScrollableFrame 的自定义日志视图组件"""
+	
+	def __init__(self, parent):
+		self.parent = parent
+		self.selected_row = None
+		self.rows = []
+		self.row_data = []
+		self.on_select_callback = None
+		
+		# 主容器
+		self.main_frame = ctk.CTkFrame(parent) if ctk else tk.Frame(parent)
+		
+		# 表头框架
+		self.header_frame = ctk.CTkFrame(self.main_frame) if ctk else tk.Frame(self.main_frame)
+		self.header_frame.pack(fill='x', padx=2, pady=(2, 0))
+		
+		# 列定义
+		self.columns = [
+			('stage', '阶段', 70),
+			('src', '源', 180), 
+			('dst', '目标/组', 180),
+			('info', '信息', 200)
+		]
+		
+		# 创建表头
+		self._create_header()
+		
+		# 可滚动内容区域
+		if ctk:
+			self.scroll_frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+		else:
+			# 降级到普通Frame + Scrollbar
+			scroll_container = tk.Frame(self.main_frame)
+			scroll_container.pack(fill='both', expand=True, padx=2, pady=2)
+			
+			canvas = tk.Canvas(scroll_container)
+			scrollbar = tk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+			self.scroll_frame = tk.Frame(canvas)
+			
+			self.scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+			canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+			canvas.configure(yscrollcommand=scrollbar.set)
+			
+			canvas.pack(side="left", fill="both", expand=True)
+			scrollbar.pack(side="right", fill="y")
+		
+		if ctk:
+			self.scroll_frame.pack(fill='both', expand=True, padx=2, pady=2)
+	
+	def _create_header(self):
+		"""创建表头"""
+		for i, (_, text, width) in enumerate(self.columns):
+			if ctk:
+				label = ctk.CTkLabel(
+					self.header_frame, 
+					text=text,
+					font=ctk.CTkFont(weight="bold"),
+					fg_color=("gray85", "gray25"),
+					height=25
+				)
+			else:
+				label = tk.Label(
+					self.header_frame,
+					text=text,
+					font=("TkDefaultFont", 9, "bold"),
+					bg="lightgray",
+					relief="raised",
+					height=1
+				)
+			label.grid(row=0, column=i, sticky='ew', padx=1, pady=1)
+			self.header_frame.grid_columnconfigure(i, weight=1, minsize=width)
+	
+	def add_row(self, values, tags=None):
+		"""添加一行数据"""
+		row_frame = CTkLogRow(self.scroll_frame, values, tags, self._on_row_select)
+		row_frame.grid(row=len(self.rows), column=0, columnspan=len(self.columns), 
+					  sticky='ew', padx=1, pady=1)
+		
+		self.rows.append(row_frame)
+		self.row_data.append((values, tags))
+		
+		# 配置网格权重
+		for i, (_, _, width) in enumerate(self.columns):
+			self.scroll_frame.grid_columnconfigure(i, weight=1, minsize=width)
+		
+		return row_frame
+	
+	def _on_row_select(self, row_frame):
+		"""处理行选择"""
+		if self.selected_row:
+			self.selected_row.set_selected(False)
+		
+		self.selected_row = row_frame
+		row_frame.set_selected(True)
+		
+		if self.on_select_callback:
+			self.on_select_callback(row_frame)
+	
+	def clear(self):
+		"""清空所有行"""
+		for row in self.rows:
+			row.destroy()
+		self.rows.clear()
+		self.row_data.clear()
+		self.selected_row = None
+	
+	def filter_rows(self, filter_func):
+		"""根据过滤函数显示/隐藏行"""
+		for i, row in enumerate(self.rows):
+			values, tags = self.row_data[i]
+			if filter_func(values, tags):
+				row.show()
+			else:
+				row.hide()
+	
+	def get_children(self):
+		"""兼容Treeview接口：获取所有行"""
+		return [i for i in range(len(self.rows))]
+	
+	def delete(self, item):
+		"""兼容Treeview接口：删除指定行"""
+		if isinstance(item, int) and 0 <= item < len(self.rows):
+			self.rows[item].destroy()
+			del self.rows[item]
+			del self.row_data[item]
+			self._reindex_rows()
+	
+	def _reindex_rows(self):
+		"""重新索引行位置"""
+		for i, row in enumerate(self.rows):
+			row.grid(row=i, column=0, columnspan=len(self.columns), 
+					sticky='ew', padx=1, pady=1)
+	
+	def insert(self, parent, index, values=None, tags=None):
+		"""兼容Treeview接口：插入行"""
+		if parent == '' and index == 'end':
+			return self.add_row(values, tags)
+	
+	def selection(self):
+		"""兼容Treeview接口：获取选中行"""
+		if self.selected_row:
+			try:
+				return [self.rows.index(self.selected_row)]
+			except ValueError:
+				return []
+		return []
+	
+	def item(self, item, option=None):
+		"""兼容Treeview接口：获取行信息"""
+		if isinstance(item, int) and 0 <= item < len(self.rows):
+			values, tags = self.row_data[item]
+			if option == 'values':
+				return values
+			elif option == 'tags':
+				return tags
+			else:
+				return {'values': values, 'tags': tags}
+		return {}
+
+
+class CTkLogRow:
+	"""单行日志显示组件"""
+	
+	def __init__(self, parent, values, tags, select_callback):
+		self.parent = parent
+		self.values = values
+		self.tags = tags
+		self.select_callback = select_callback
+		self.selected = False
+		
+		# 行容器
+		if ctk:
+			self.frame = ctk.CTkFrame(parent, height=25, corner_radius=3)
+		else:
+			self.frame = tk.Frame(parent, height=25, relief="flat", bd=1)
+		
+		# 根据标签设置颜色
+		self._set_colors()
+		
+		# 创建列标签
+		self.labels = []
+		for i, value in enumerate(values):
+			text = str(value)
+			# 限制文本长度避免过长
+			if len(text) > 50:
+				text = text[:47] + "..."
+			
+			if ctk:
+				label = ctk.CTkLabel(
+					self.frame,
+					text=text,
+					anchor='w',
+					height=20,
+					font=ctk.CTkFont(size=11)
+				)
+			else:
+				label = tk.Label(
+					self.frame,
+					text=text,
+					anchor='w',
+					height=1,
+					font=("TkDefaultFont", 9)
+				)
+			
+			label.grid(row=0, column=i, sticky='ew', padx=2)
+			self.labels.append(label)
+			
+			# 绑定点击事件
+			label.bind("<Button-1>", self._on_click)
+		
+		# 配置列权重
+		for i in range(len(values)):
+			self.frame.grid_columnconfigure(i, weight=1)
+		
+		# 绑定框架点击事件
+		self.frame.bind("<Button-1>", self._on_click)
+	
+	def _set_colors(self):
+		"""根据标签设置颜色"""
+		stage_colors = {
+			'STAGE_DEDUPE': ("#FFF5E6", "#4A3700"),      # 淡橙
+			'STAGE_CONVERT': ("#E6F5FF", "#003A4A"),     # 淡蓝
+			'STAGE_RENAME': ("#F0E6FF", "#3D0047"),      # 淡紫
+			'STAGE_CLASSIFY': ("#E6FFE6", "#004700"),    # 淡绿
+			'STAGE_DELETE': ("#FFE6E6", "#4A0000"),      # 淡红
+			'STAGE_MOVE': ("#E6FFE6", "#004700"),        # 淡绿
+			'STAGE_KEEP': ("#F5F5F5", "#2A2A2A"),        # 灰白
+			'STAGE_INFO': ("#EEEEEE", "#2A2A2A"),        # 信息行
+		}
+		
+		if self.tags and len(self.tags) >= 3:
+			stage_tag = self.tags[2]
+			if stage_tag in stage_colors and ctk:
+				bg_color, text_color = stage_colors[stage_tag]
+				self.frame.configure(fg_color=bg_color)
+			elif stage_tag in stage_colors:
+				bg_color, _ = stage_colors[stage_tag]
+				self.frame.configure(bg=bg_color)
+	
+	def _on_click(self, event=None):
+		"""处理点击事件"""
+		self.select_callback(self)
+	
+	def set_selected(self, selected):
+		"""设置选择状态"""
+		self.selected = selected
+		if selected:
+			if ctk:
+				self.frame.configure(border_width=2, border_color="#1f6aa5")
+			else:
+				self.frame.configure(relief="solid", bd=2, highlightbackground="#1f6aa5")
+		else:
+			if ctk:
+				self.frame.configure(border_width=0)
+			else:
+				self.frame.configure(relief="flat", bd=1)
+	
+	def grid(self, **kwargs):
+		"""显示行"""
+		self.frame.grid(**kwargs)
+	
+	def show(self):
+		"""显示行"""
+		self.frame.grid()
+	
+	def hide(self):
+		"""隐藏行"""
+		self.frame.grid_remove()
+	
+	def grid_remove(self):
+		"""隐藏行"""
+		self.frame.grid_remove()
+	
+	def destroy(self):
+		"""销毁行"""
+		self.frame.destroy()
 
 # 配置和常量
 if ImageFile:
@@ -935,6 +1220,9 @@ class ImageToolApp:
 			'total_size_after': 0,
 		}
 		
+		# 进度相关（CTk 支持）
+		self._progress_max = 100
+		self.progress_is_ctk = False
 		# 缓存和输出相关
 		self.last_out_dir = None
 		self.cache_dir = None  # 预览缓存文件夹
@@ -957,6 +1245,14 @@ class ImageToolApp:
 		
 		# 构建UI
 		self._build()
+		
+		# 添加测试CTk日志功能的临时按钮（仅在使用CTk时）
+		if hasattr(self, 'log_view') and self.log_view:
+			test_frame = ttk.Frame(self.right_frame)
+			test_frame.pack(fill='x', pady=(0, 4))
+			ttk.Button(test_frame, text='测试CTk日志', command=self._test_ctk_log, width=12).pack(side='left', padx=(0, 4))
+			ttk.Button(test_frame, text='清空日志', command=self._clear_log, width=12).pack(side='left', padx=(0, 4))
+		
 		self.root.after(200, self._drain)
 		
 		# 退出时清理缓存
@@ -1178,6 +1474,13 @@ class ImageToolApp:
 		针对Windows系统启用DPI感知以获得更好的显示效果。
 		"""
 		self.root.title('图片工具')
+		# CTk 外观/主题设置（若可用）
+		try:
+			if ctk is not None:
+				ctk.set_appearance_mode("system")  # 跟随系统深浅色
+				ctk.set_default_color_theme("blue")  # Windows 11 风格相近的蓝色主色
+		except Exception:
+			pass
 		
 		# Windows DPI感知设置
 		try:
@@ -1225,9 +1528,13 @@ class ImageToolApp:
 		
 		使用ttk.PanedWindow实现可调节的分栏布局，用户可以拖拽调整比例。
 		"""
-		# 主容器
-		self.outer = ttk.Frame(self.root, padding=(10, 8, 10, 8))
-		self.outer.pack(fill='both', expand=True)
+		# 主容器（CTkFrame 优先）
+		if ctk is not None:
+			self.outer = ctk.CTkFrame(self.root)
+			self.outer.pack(fill='both', expand=True, padx=10, pady=8)
+		else:
+			self.outer = ttk.Frame(self.root, padding=(10, 8, 10, 8))
+			self.outer.pack(fill='both', expand=True)
 		
 		# 创建左右两列布局
 		main_paned = ttk.PanedWindow(self.outer, orient='horizontal')
@@ -1277,143 +1584,284 @@ class ImageToolApp:
 
 	def _build_log_preview_sections(self):
 		"""构建右侧日志预览区域"""
-		# 日志筛选工具条
-		filter_bar=ttk.Frame(self.right_frame); filter_bar.pack(fill='x',pady=(0,2))
-		self.log_filter_stage=tk.StringVar(value='全部')
-		self.log_filter_kw=tk.StringVar()
-		self.log_filter_fail=tk.BooleanVar(value=False)
-		ttk.Label(filter_bar,text='筛选:').pack(side='left')
-		cb_stage=ttk.Combobox(filter_bar,width=8,state='readonly',textvariable=self.log_filter_stage,
-			values=['全部','去重','转换','重命名','删除','移动','保留','信息'])
-		cb_stage.pack(side='left',padx=(2,4))
-		ent_kw=ttk.Entry(filter_bar,width=18,textvariable=self.log_filter_kw)
-		ent_kw.pack(side='left');
-		cb_fail=ttk.Checkbutton(filter_bar,text='仅失败',variable=self.log_filter_fail)
-		cb_fail.pack(side='left',padx=(6,0))
-		btn_reset=ttk.Button(filter_bar,text='重置',width=6,command=lambda: self._reset_log_filter())
-		btn_reset.pack(side='right',padx=(4,0))
-		btn_clear_log=ttk.Button(filter_bar,text='清空',width=6,command=self._clear_log)
-		btn_clear_log.pack(side='right',padx=(4,0))
-		btn_open_log=ttk.Button(filter_bar,text='打开日志',width=8,command=self._open_program_log)
-		btn_open_log.pack(side='right',padx=(4,0))
+		# 日志筛选工具条 - 暂时使用传统组件避免布局冲突
+		filter_bar = ttk.Frame(self.right_frame)
+		filter_bar.pack(fill='x', pady=(0, 2))
+		
+		self.log_filter_stage = tk.StringVar(value='全部')
+		self.log_filter_kw = tk.StringVar()
+		self.log_filter_fail = tk.BooleanVar(value=False)
+		
+		# 筛选标签
+		filter_label = ttk.Label(filter_bar, text='筛选:')
+		filter_label.pack(side='left', padx=(5, 0))
+		
+		# 阶段筛选
+		cb_stage = ttk.Combobox(filter_bar, width=8, state='readonly', textvariable=self.log_filter_stage,
+							   values=['全部', '去重', '转换', '重命名', '删除', '移动', '保留', '信息'])
+		cb_stage.pack(side='left', padx=(2, 4))
+		
+		# 关键词筛选
+		ent_kw = ttk.Entry(filter_bar, width=18, textvariable=self.log_filter_kw)
+		ent_kw.pack(side='left')
+		
+		# 仅失败筛选
+		cb_fail = ttk.Checkbutton(filter_bar, text='仅失败', variable=self.log_filter_fail)
+		cb_fail.pack(side='left', padx=(6, 0))
+		
+		# 按钮组
+		btn_reset = ttk.Button(filter_bar, text='重置', width=6, command=lambda: self._reset_log_filter())
+		btn_clear_log = ttk.Button(filter_bar, text='清空', width=6, command=self._clear_log)
+		btn_open_log = ttk.Button(filter_bar, text='打开日志', width=8, command=self._open_program_log)
+		
+		btn_reset.pack(side='right', padx=(4, 0))
+		btn_clear_log.pack(side='right', padx=(4, 0))
+		btn_open_log.pack(side='right', padx=(4, 0))
+		
 		# 绑定变更实时刷新
 		self.log_filter_stage.trace_add('write', self._on_change_log_filter)
 		self.log_filter_kw.trace_add('write', self._on_change_log_filter)
 		self.log_filter_fail.trace_add('write', self._on_change_log_filter)
 		
-		# 日志和预览的垂直分割
-		pan=ttk.PanedWindow(self.right_frame,orient='vertical'); pan.pack(fill='both',expand=True)
-		self.paned=pan  # 保存引用用于自动调整
-		upper=ttk.Frame(pan); lower=ttk.Frame(pan)
-		self.upper_frame=upper; self.lower_frame=lower
-		pan.add(upper,weight=0)
-		pan.add(lower,weight=1)
-		upper.columnconfigure(0,weight=1); upper.rowconfigure(0,weight=1)
+		# 主内容区域（只针对右侧面板使用CTk）
+		if ctk is not None:
+			# CTk版本：使用CTkFrame分离结构
+			content_frame = ctk.CTkFrame(self.right_frame)
+			content_frame.pack(fill='both', expand=True)
+			
+			# 上部：日志区域
+			self.upper_frame = ctk.CTkFrame(content_frame)
+			self.upper_frame.pack(fill='both', expand=False, padx=5, pady=(5, 2))
+			
+			# 创建CTk日志视图
+			self.log_view = CTkLogView(self.upper_frame)
+			self.log_view.main_frame.pack(fill='both', expand=True)
+			self.log_view.on_select_callback = self._on_ctk_log_select
+			
+			# 为了兼容，创建log属性指向CTkLogView
+			self.log = self.log_view
+			
+			# 下部：预览区域
+			self.lower_frame = ctk.CTkFrame(content_frame)
+			self.lower_frame.pack(fill='both', expand=True, padx=5, pady=(2, 5))
+			
+			# 预览区域内容
+			preview_title = ctk.CTkLabel(self.lower_frame, text='预览 (前后对比)', 
+										font=ctk.CTkFont(weight="bold"))
+			preview_title.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 预览内容框架
+			prev = ctk.CTkFrame(self.lower_frame)
+			prev.pack(fill='both', expand=True, padx=5, pady=(0, 5))
+			
+		else:
+			# 传统版本：使用PanedWindow
+			pan = ttk.PanedWindow(self.right_frame, orient='vertical')
+			pan.pack(fill='both', expand=True)
+			self.paned = pan  # 保存引用用于自动调整
+			upper = ttk.Frame(pan)
+			lower = ttk.Frame(pan)
+			self.upper_frame = upper
+			self.lower_frame = lower
+			pan.add(upper, weight=0)
+			pan.add(lower, weight=1)
+			upper.columnconfigure(0, weight=1)
+			upper.rowconfigure(0, weight=1)
+			
+			# 日志表格
+			cols = [('stage', '阶段', 70), ('src', '源', 180), ('dst', '目标/组', 180), ('info', '信息', 150)]
+			self.log = ttk.Treeview(upper, columns=[c[0] for c in cols], show='headings', height=12)
+			for cid, txt, w in cols:
+				self.log.heading(cid, text=txt)
+				self.log.column(cid, width=w, anchor='w', stretch=True)
+			self.log.grid(row=0, column=0, sticky='nsew')
+			
+			# 阶段着色 (使用 tag 样式)
+			style = ttk.Style(self.root)
+			# 尝试设置浅色背景，兼容浅/深色主题用户可自行调整
+			self.log.tag_configure('STAGE_DEDUPE', background='#FFF5E6')      # 淡橙 去重
+			self.log.tag_configure('STAGE_CONVERT', background='#E6F5FF')     # 淡蓝 转换
+			self.log.tag_configure('STAGE_RENAME', background='#F0E6FF')      # 淡紫 重命名
+			self.log.tag_configure('STAGE_CLASSIFY', background='#E6FFE6')    # 淡绿 分类
+			self.log.tag_configure('STAGE_DELETE', background='#FFE6E6')      # 淡红 删除
+			self.log.tag_configure('STAGE_MOVE', background='#E6FFE6')        # 淡绿 移动
+			self.log.tag_configure('STAGE_KEEP', background='#F5F5F5')        # 灰白 保留
+			self.log.tag_configure('STAGE_INFO', background='#EEEEEE')        # 信息行
+			
+			# 日志滚动条
+			vsb = ttk.Scrollbar(upper, orient='vertical', command=self.log.yview)
+			vsb.grid(row=0, column=1, sticky='ns')
+			hsb = ttk.Scrollbar(upper, orient='horizontal', command=self.log.xview)
+			hsb.grid(row=1, column=0, sticky='we')
+			self.log.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+			
+			# 预览区域
+			lower.columnconfigure(0, weight=1)
+			lower.rowconfigure(0, weight=1)
+			prev = ttk.LabelFrame(lower, text='预览 (前后对比)')
+			prev.pack(fill='both', expand=True)
 		
-		# 日志表格
-		cols=[('stage','阶段',70),('src','源',180),('dst','目标/组',180),('info','信息',150)]
-		self.log=ttk.Treeview(upper,columns=[c[0] for c in cols],show='headings',height=12)
-		for cid,txt,w in cols: self.log.heading(cid,text=txt); self.log.column(cid,width=w,anchor='w',stretch=True)
-		self.log.grid(row=0,column=0,sticky='nsew')
+		# 预览区域内容（CTk和传统版本共用）
+		for i in range(2):
+			prev.columnconfigure(i, weight=1)
+		prev.rowconfigure(0, weight=1)
 		
-		# 阶段着色 (使用 tag 样式)
-		style=ttk.Style(self.root)
-		# 尝试设置浅色背景，兼容浅/深色主题用户可自行调整
-		self.log.tag_configure('STAGE_DEDUPE', background='#FFF5E6')      # 淡橙 去重
-		self.log.tag_configure('STAGE_CONVERT', background='#E6F5FF')     # 淡蓝 转换
-		self.log.tag_configure('STAGE_RENAME', background='#F0E6FF')      # 淡紫 重命名
-		self.log.tag_configure('STAGE_CLASSIFY', background='#E6FFE6')    # 淡绿 分类
-		self.log.tag_configure('STAGE_DELETE', background='#FFE6E6')      # 淡红 删除
-		self.log.tag_configure('STAGE_MOVE', background='#E6FFE6')        # 淡绿 移动
-		self.log.tag_configure('STAGE_KEEP', background='#F5F5F5')        # 灰白 保留
-		self.log.tag_configure('STAGE_INFO', background='#EEEEEE')        # 信息行
+		# BEFORE (源)
+		if ctk is not None:
+			before_frame = ctk.CTkFrame(prev)
+		else:
+			before_frame = ttk.Frame(prev, padding=2)
+		before_frame.grid(row=0, column=0, sticky='nsew', padx=2, pady=2)
+		before_frame.columnconfigure(0, weight=1)
+		before_frame.rowconfigure(0, weight=1)
 		
-		# 日志滚动条
-		vsb=ttk.Scrollbar(upper,orient='vertical',command=self.log.yview); vsb.grid(row=0,column=1,sticky='ns')
-		hsb=ttk.Scrollbar(upper,orient='horizontal',command=self.log.xview); hsb.grid(row=1,column=0,sticky='we')
-		self.log.configure(yscrollcommand=vsb.set,xscrollcommand=hsb.set)
+		if ctk is not None:
+			self.preview_before_label = ctk.CTkLabel(before_frame, text='(源)')
+		else:
+			self.preview_before_label = ttk.Label(before_frame, text='(源)')
+		self.preview_before_label.grid(row=0, column=0, sticky='n')
 		
-		# 预览区域
-		lower.columnconfigure(0,weight=1); lower.rowconfigure(0,weight=1)
-		prev=ttk.LabelFrame(lower,text='预览 (前后对比)'); prev.pack(fill='both',expand=True)
-		for i in range(2): prev.columnconfigure(i,weight=1)
-		prev.rowconfigure(0,weight=1)
+		self.preview_before_info = tk.StringVar(value='')
+		if ctk is not None:
+			self.preview_before_info_label = ctk.CTkLabel(
+				before_frame, 
+				textvariable=self.preview_before_info,
+				wraplength=400,
+				justify='left'
+			)
+		else:
+			self.preview_before_info_label = ttk.Label(
+				before_frame, 
+				textvariable=self.preview_before_info,
+				foreground='gray',
+				wraplength=400,
+				justify='left'
+			)
+		self.preview_before_info_label.grid(row=1, column=0, sticky='we', padx=2)
 		
-		# BEFORE
-		before_frame=ttk.Frame(prev,padding=2); before_frame.grid(row=0,column=0,sticky='nsew')
-		before_frame.columnconfigure(0,weight=1)
-		before_frame.rowconfigure(0,weight=1)
-		self.preview_before_label=ttk.Label(before_frame,text='(源)'); self.preview_before_label.grid(row=0,column=0,sticky='n')
-		self.preview_before_info=tk.StringVar(value='')
-		self.preview_before_info_label=ttk.Label(before_frame,textvariable=self.preview_before_info,foreground='gray',wraplength=400,justify='left')
-		self.preview_before_info_label.grid(row=1,column=0,sticky='we',padx=2)
+		# AFTER (结果)
+		if ctk is not None:
+			after_frame = ctk.CTkFrame(prev)
+		else:
+			after_frame = ttk.Frame(prev, padding=2)
+		after_frame.grid(row=0, column=1, sticky='nsew', padx=2, pady=2)
+		after_frame.columnconfigure(0, weight=1)
+		after_frame.rowconfigure(0, weight=1)
 		
-		# AFTER
-		after_frame=ttk.Frame(prev,padding=2); after_frame.grid(row=0,column=1,sticky='nsew')
-		after_frame.columnconfigure(0,weight=1)
-		after_frame.rowconfigure(0,weight=1)
-		self.preview_after_label=ttk.Label(after_frame,text='(结果)'); self.preview_after_label.grid(row=0,column=0,sticky='n')
-		self.preview_after_info=tk.StringVar(value='')
-		self.preview_after_info_label=ttk.Label(after_frame,textvariable=self.preview_after_info,foreground='gray',wraplength=400,justify='left')
-		self.preview_after_info_label.grid(row=1,column=0,sticky='we',padx=2)
+		if ctk is not None:
+			self.preview_after_label = ctk.CTkLabel(after_frame, text='(结果)')
+		else:
+			self.preview_after_label = ttk.Label(after_frame, text='(结果)')
+		self.preview_after_label.grid(row=0, column=0, sticky='n')
+		
+		self.preview_after_info = tk.StringVar(value='')
+		if ctk is not None:
+			self.preview_after_info_label = ctk.CTkLabel(
+				after_frame, 
+				textvariable=self.preview_after_info,
+				wraplength=400,
+				justify='left'
+			)
+		else:
+			self.preview_after_info_label = ttk.Label(
+				after_frame, 
+				textvariable=self.preview_after_info,
+				foreground='gray',
+				wraplength=400,
+				justify='left'
+			)
+		self.preview_after_info_label.grid(row=1, column=0, sticky='we', padx=2)
 		
 		# 兼容旧属性引用
-		self.preview_label=self.preview_after_label
-		self.preview_info=self.preview_after_info
+		self.preview_label = self.preview_after_label
+		self.preview_info = self.preview_after_info
 		
 		# 自动调整窗口高度选项
-		self.auto_resize_window=tk.BooleanVar(value=True)
-		cb_auto=ttk.Checkbutton(prev,text='随图调高',variable=self.auto_resize_window)
-		cb_auto.grid(row=2,column=0,columnspan=2,sticky='w',pady=(2,0))  # 跨越两列以保持对称
-		self._last_auto_size=None
+		self.auto_resize_window = tk.BooleanVar(value=True)
+		if ctk is not None:
+			cb_auto = ctk.CTkCheckBox(prev, text='随图调高', variable=self.auto_resize_window)
+		else:
+			cb_auto = ttk.Checkbutton(prev, text='随图调高', variable=self.auto_resize_window)
+		cb_auto.grid(row=2, column=0, columnspan=2, sticky='w', pady=(2, 0))  # 跨越两列以保持对称
+		self._last_auto_size = None
 		self.auto_resize_window.trace_add('write', lambda *a: self._maybe_resize_window())
 		
 		# 事件绑定
-		self.log.bind('<<TreeviewSelect>>', self._on_select_row)
-		self.log.bind('<Motion>', self._on_log_motion)
-		self.log.bind('<Double-1>', self._on_log_double_click)
+		if ctk is None:
+			# 传统版本的事件绑定
+			self.log.bind('<<TreeviewSelect>>', self._on_select_row)
+			self.log.bind('<Motion>', self._on_log_motion)
+			self.log.bind('<Double-1>', self._on_log_double_click)
+		
+		# 初始化原始日志数据
+		self._raw_logs = []
 
 	def _build_io_section(self):
 		"""构建输入输出区域"""
-		io_frame = ttk.LabelFrame(self.left_frame, text="输入输出配置", padding=(8, 6))
-		io_frame.pack(fill='x', pady=(0, 8))
+		if ctk is not None:
+			io_frame = ctk.CTkFrame(self.left_frame)
+			io_frame.pack(fill='x', pady=(0, 8))
+			
+			# 标题
+			title_label = ctk.CTkLabel(io_frame, text='输入输出配置', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			content_frame = ctk.CTkFrame(io_frame)
+			content_frame.pack(fill='x', padx=8, pady=(0, 4))
+		else:
+			io_frame = ttk.LabelFrame(self.left_frame, text="输入输出配置", padding=(8, 6))
+			io_frame.pack(fill='x', pady=(0, 8))
+			content_frame = io_frame  # 传统版本直接使用io_frame
 		
 		# 配置列权重
 		for i in range(10):
-			io_frame.columnconfigure(i, weight=1 if i in (1, 6) else 0)
+			content_frame.columnconfigure(i, weight=1 if i in (1, 6) else 0)
 		
 		# 输入行
 		ttk.Label(io_frame, text='输入:').grid(row=0, column=0, sticky='e', padx=(0, 5))
 		self.in_var = tk.StringVar()
-		ent_in = ttk.Entry(io_frame, textvariable=self.in_var, width=40)
+		if ctk is not None:
+			ent_in = ctk.CTkEntry(io_frame, textvariable=self.in_var, width=320)
+		else:
+			ent_in = ttk.Entry(io_frame, textvariable=self.in_var, width=40)
 		ent_in.grid(row=0, column=1, sticky='we', padx=3)
 		
-		btn_in = ttk.Button(io_frame, text='目录', command=self._pick_in, width=6)
+		btn_in = (ctk.CTkButton(io_frame, text='目录', command=self._pick_in, width=64)
+				if ctk is not None else ttk.Button(io_frame, text='目录', command=self._pick_in, width=6))
 		btn_in.grid(row=0, column=2, padx=(3, 3))
 		
-		btn_in_file = ttk.Button(io_frame, text='文件', command=self._pick_in_file, width=6)
+		btn_in_file = (ctk.CTkButton(io_frame, text='文件', command=self._pick_in_file, width=64)
+					 if ctk is not None else ttk.Button(io_frame, text='文件', command=self._pick_in_file, width=6))
 		btn_in_file.grid(row=0, column=3, padx=(0, 8))
 		
 		self.recursive_var = tk.BooleanVar(value=False)
-		cb_rec = ttk.Checkbutton(io_frame, text='递归', variable=self.recursive_var)
+		cb_rec = (ctk.CTkCheckBox(io_frame, text='递归', variable=self.recursive_var)
+				 if ctk is not None else ttk.Checkbutton(io_frame, text='递归', variable=self.recursive_var))
 		cb_rec.grid(row=0, column=4, sticky='w')
 		
 		# 输出行
 		ttk.Label(io_frame, text='输出:').grid(row=1, column=0, sticky='e', padx=(0, 5), pady=(8, 0))
 		self.out_var = tk.StringVar()
-		ent_out = ttk.Entry(io_frame, textvariable=self.out_var, width=32)
+		if ctk is not None:
+			ent_out = ctk.CTkEntry(io_frame, textvariable=self.out_var, width=260)
+		else:
+			ent_out = ttk.Entry(io_frame, textvariable=self.out_var, width=32)
 		ent_out.grid(row=1, column=1, sticky='we', padx=3, pady=(8, 0))
 		self.out_var.trace_add('write', self._on_out_dir_change)
 		
-		btn_out = ttk.Button(io_frame, text='选择', command=self._pick_out, width=6)
+		btn_out = (ctk.CTkButton(io_frame, text='选择', command=self._pick_out, width=64)
+				 if ctk is not None else ttk.Button(io_frame, text='选择', command=self._pick_out, width=6))
 		btn_out.grid(row=1, column=2, padx=(3, 3), pady=(8, 0))
 		
-		btn_open_out = ttk.Button(io_frame, text='打开', command=self._open_last_out, width=6)
+		btn_open_out = (ctk.CTkButton(io_frame, text='打开', command=self._open_last_out, width=64)
+					  if ctk is not None else ttk.Button(io_frame, text='打开', command=self._open_last_out, width=6))
 		btn_open_out.grid(row=1, column=3, padx=(0, 0), pady=(8, 0))
 		
 		# 清空输出目录选项
 		self.clear_output_var = tk.BooleanVar(value=True)  # 默认清空
-		cb_clear_output = ttk.Checkbutton(io_frame, text='清空输出目录', variable=self.clear_output_var)
+		cb_clear_output = (ctk.CTkCheckBox(io_frame, text='清空输出目录', variable=self.clear_output_var)
+						  if ctk is not None else ttk.Checkbutton(io_frame, text='清空输出目录', variable=self.clear_output_var))
 		cb_clear_output.grid(row=1, column=4, sticky='w', pady=(8, 0), padx=(8, 0))
 		
 		# 保存引用供tooltip使用
@@ -1432,23 +1880,23 @@ class ImageToolApp:
 		skip_frame.pack(fill='x', pady=(0, 8))
 		
 		# 启用控制行
-		skip_enable_frame = ttk.Frame(skip_frame)
+		skip_enable_frame = (ctk.CTkFrame(skip_frame) if ctk is not None else ttk.Frame(skip_frame))
 		skip_enable_frame.pack(fill='x', pady=(0, 4))
 		
-		skip_enable_cb = ttk.Checkbutton(skip_enable_frame, text='启用跳过功能', 
+		skip_enable_cb = (ctk.CTkCheckBox(skip_enable_frame, text='启用跳过功能', variable=self.skip_formats_enabled, command=self._toggle_skip_formats) if ctk is not None else ttk.Checkbutton(skip_enable_frame, text='启用跳过功能', 
 										variable=self.skip_formats_enabled, 
-										command=self._toggle_skip_formats)
+										command=self._toggle_skip_formats))
 		skip_enable_cb.pack(side='left')
 		
-		skip_convert_only_cb = ttk.Checkbutton(skip_enable_frame, text='仅格式转换跳过', 
-											   variable=self.skip_convert_only)
+		skip_convert_only_cb = (ctk.CTkCheckBox(skip_enable_frame, text='仅格式转换跳过', variable=self.skip_convert_only) if ctk is not None else ttk.Checkbutton(skip_enable_frame, text='仅格式转换跳过', 
+										   variable=self.skip_convert_only))
 		skip_convert_only_cb.pack(side='left', padx=(20, 0))
 		self.skip_convert_only_cb = skip_convert_only_cb
 		
 		# 预设格式选择行
-		formats_frame = ttk.Frame(skip_frame)
+		formats_frame = (ctk.CTkFrame(skip_frame) if ctk is not None else ttk.Frame(skip_frame))
 		formats_frame.pack(fill='x', pady=(0, 4))
-		ttk.Label(formats_frame, text='预设:').pack(side='left', padx=(0, 8))
+		(ctk.CTkLabel(formats_frame, text='预设:') if ctk is not None else ttk.Label(formats_frame, text='预设:')).pack(side='left', padx=(0, 8))
 		
 		format_options = [
 			('JPEG', self.skip_jpeg), ('PNG', self.skip_png),
@@ -1458,16 +1906,16 @@ class ImageToolApp:
 		
 		self.skip_format_checkboxes = []
 		for text, var in format_options:
-			cb = ttk.Checkbutton(formats_frame, text=text, variable=var)
+			cb = (ctk.CTkCheckBox(formats_frame, text=text, variable=var) if ctk is not None else ttk.Checkbutton(formats_frame, text=text, variable=var))
 			cb.pack(side='left', padx=(0, 12))
 			self.skip_format_checkboxes.append(cb)
 		
 		# 自定义格式输入行
-		custom_frame = ttk.Frame(skip_frame)
+		custom_frame = (ctk.CTkFrame(skip_frame) if ctk is not None else ttk.Frame(skip_frame))
 		custom_frame.pack(fill='x', pady=(0, 2))
-		ttk.Label(custom_frame, text='自定义:').pack(side='left', padx=(0, 8))
+		(ctk.CTkLabel(custom_frame, text='自定义:') if ctk is not None else ttk.Label(custom_frame, text='自定义:')).pack(side='left', padx=(0, 8))
 		
-		self.skip_custom_entry = ttk.Entry(custom_frame, textvariable=self.skip_custom_var, width=25)
+		self.skip_custom_entry = (ctk.CTkEntry(custom_frame, textvariable=self.skip_custom_var, width=220) if ctk is not None else ttk.Entry(custom_frame, textvariable=self.skip_custom_var, width=25))
 		self.skip_custom_entry.pack(side='left', padx=(0, 8))
 		
 		help_label = ttk.Label(custom_frame, text='(多个格式用空格或逗号分隔，如: AVIF HEIC)', 
@@ -1479,8 +1927,13 @@ class ImageToolApp:
 
 	def _build_functions_section(self):
 		"""构建功能选择区域"""
-		opts_frame = ttk.LabelFrame(self.left_frame, text="功能配置", padding=(8, 6))
-		opts_frame.pack(fill='x', pady=(0, 8))
+		if ctk is not None:
+			opts_frame = ctk.CTkFrame(self.left_frame)
+			ctk.CTkLabel(opts_frame, text='功能配置').pack(anchor='w', padx=8, pady=(4, 2))
+			opts_frame.pack(fill='x', pady=(0, 8))
+		else:
+			opts_frame = ttk.LabelFrame(self.left_frame, text="功能配置", padding=(8, 6))
+			opts_frame.pack(fill='x', pady=(0, 8))
 		
 		# 功能变量初始化
 		self.enable_dedupe = tk.BooleanVar(value=False)
@@ -1501,60 +1954,116 @@ class ImageToolApp:
 		self.ratio_snap_var = tk.BooleanVar(value=False)  # 不匹配是否取最近
 		
 		# 主功能复选框行
-		functions_row = ttk.Frame(opts_frame)
+		functions_row = (ctk.CTkFrame(opts_frame) if ctk is not None else ttk.Frame(opts_frame))
 		functions_row.pack(fill='x', pady=(0, 4))
 		
-		self.cb_classify = ttk.Checkbutton(functions_row, text='比例分类', variable=self.classify_ratio_var)
+		self.cb_classify = (ctk.CTkCheckBox(functions_row, text='比例分类', variable=self.classify_ratio_var) if ctk is not None else ttk.Checkbutton(functions_row, text='比例分类', variable=self.classify_ratio_var))
 		self.cb_classify.pack(side='left', padx=(0, 8))
 		
-		self.cb_shape = ttk.Checkbutton(functions_row, text='形状分类', variable=self.classify_shape_var)
+		self.cb_shape = (ctk.CTkCheckBox(functions_row, text='形状分类', variable=self.classify_shape_var) if ctk is not None else ttk.Checkbutton(functions_row, text='形状分类', variable=self.classify_shape_var))
 		self.cb_shape.pack(side='left', padx=(0, 8))
 		
-		self.cb_convert = ttk.Checkbutton(functions_row, text='转换', variable=self.enable_convert)
+		self.cb_convert = (ctk.CTkCheckBox(functions_row, text='转换', variable=self.enable_convert) if ctk is not None else ttk.Checkbutton(functions_row, text='转换', variable=self.enable_convert))
 		self.cb_convert.pack(side='left', padx=(0, 8))
 		
-		self.cb_dedupe = ttk.Checkbutton(functions_row, text='去重', variable=self.enable_dedupe)
+		self.cb_dedupe = (ctk.CTkCheckBox(functions_row, text='去重', variable=self.enable_dedupe) if ctk is not None else ttk.Checkbutton(functions_row, text='去重', variable=self.enable_dedupe))
 		self.cb_dedupe.pack(side='left', padx=(0, 8))
 		
-		self.cb_rename = ttk.Checkbutton(functions_row, text='重命名', variable=self.enable_rename)
+		self.cb_rename = (ctk.CTkCheckBox(functions_row, text='重命名', variable=self.enable_rename) if ctk is not None else ttk.Checkbutton(functions_row, text='重命名', variable=self.enable_rename))
 		self.cb_rename.pack(side='left', padx=(0, 8))
 		
 		# 控制选项行
-		controls_row = ttk.Frame(opts_frame)
+		controls_row = (ctk.CTkFrame(opts_frame) if ctk is not None else ttk.Frame(opts_frame))
 		controls_row.pack(fill='x', pady=(0, 4))
 		
-		ttk.Label(controls_row, text='线程:').pack(side='left', padx=(0, 4))
-		self.sp_workers = ttk.Spinbox(controls_row, from_=1, to=64, textvariable=self.workers_var, width=5)
-		self.sp_workers.pack(side='left', padx=(0, 16))
+		if ctk is not None:
+			ctk.CTkLabel(controls_row, text='线程:').pack(side='left', padx=(0, 4))
+			workers_frame = ctk.CTkFrame(controls_row)
+			workers_frame.pack(side='left', padx=(0, 16))
+			self._workers_val_label = ctk.CTkLabel(workers_frame, text=str(self.workers_var.get()))
+			self._workers_val_label.pack(side='right', padx=(6, 0))
+			def _on_workers_change(v):
+				try:
+					val = int(float(v))
+				except Exception:
+					val = self.workers_var.get()
+				val = max(1, min(64, val))
+				self.workers_var.set(val)
+				self._workers_val_label.configure(text=str(val))
+			self.sp_workers = ctk.CTkSlider(workers_frame, from_=1, to=64, number_of_steps=63, command=_on_workers_change, width=140)
+			self.sp_workers.set(self.workers_var.get())
+			self.sp_workers.pack(side='left')
+		else:
+			ttk.Label(controls_row, text='线程:').pack(side='left', padx=(0, 4))
+			self.sp_workers = ttk.Spinbox(controls_row, from_=1, to=64, textvariable=self.workers_var, width=5)
+			self.sp_workers.pack(side='left', padx=(0, 16))
 		
-		self.cb_global_rm_src = ttk.Checkbutton(controls_row, text='删源', variable=self.global_remove_src)
+		self.cb_global_rm_src = (ctk.CTkCheckBox(controls_row, text='删源', variable=self.global_remove_src) if ctk is not None else ttk.Checkbutton(controls_row, text='删源', variable=self.global_remove_src))
 		self.cb_global_rm_src.pack(side='left', padx=(0, 16))
 		
 		# 操作按钮
-		self.btn_cancel = ttk.Button(controls_row, text='取消', command=self._cancel, width=8)
-		self.btn_cancel.pack(side='right', padx=(4, 0))
-		
-		self.btn_preview = ttk.Button(controls_row, text='预览', command=self._preview, width=8)
-		self.btn_preview.pack(side='right', padx=(4, 0))
-		
-		self.btn_start = ttk.Button(controls_row, text='开始', command=lambda: self._start(write_to_output=True), width=8)
-		self.btn_start.pack(side='right', padx=(4, 0))
+		if ctk is not None:
+			self.btn_cancel = ctk.CTkButton(controls_row, text='取消', command=self._cancel, width=88)
+			self.btn_cancel.pack(side='right', padx=(4, 0))
+			self.btn_preview = ctk.CTkButton(controls_row, text='预览', command=self._preview, width=88)
+			self.btn_preview.pack(side='right', padx=(4, 0))
+			self.btn_start = ctk.CTkButton(controls_row, text='开始', command=lambda: self._start(write_to_output=True), width=88)
+			self.btn_start.pack(side='right', padx=(4, 0))
+		else:
+			self.btn_cancel = ttk.Button(controls_row, text='取消', command=self._cancel, width=8)
+			self.btn_cancel.pack(side='right', padx=(4, 0))
+			self.btn_preview = ttk.Button(controls_row, text='预览', command=self._preview, width=8)
+			self.btn_preview.pack(side='right', padx=(4, 0))
+			self.btn_start = ttk.Button(controls_row, text='开始', command=lambda: self._start(write_to_output=True), width=8)
+			self.btn_start.pack(side='right', padx=(4, 0))
 
 	def _build_classification_section(self):
 		"""构建分类配置区域"""
+		# 启用左侧的CTk组件迁移
+		use_ctk_left = True  # 启用左侧CTk使用
+		
 		# 比例分类
-		ratio_frame = ttk.LabelFrame(self.left_frame, text='比例分类', padding=(8, 6))
-		ratio_frame.pack(fill='x', pady=(0, 8))
+		if use_ctk_left and ctk is not None:
+			ratio_frame = ctk.CTkFrame(self.left_frame)
+			ratio_frame.pack(fill='x', pady=(0, 8))
+			
+			# 标题
+			title_label = ctk.CTkLabel(ratio_frame, text='比例分类', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			content_frame = ctk.CTkFrame(ratio_frame)
+			content_frame.pack(fill='x', padx=8, pady=(0, 4))
+			content_frame.columnconfigure(5, weight=1)
+		else:
+			ratio_frame = ttk.LabelFrame(self.left_frame, text='比例分类', padding=(8, 6))
+			ratio_frame.pack(fill='x', pady=(0, 8))
+			content_frame = ratio_frame  # 传统版本直接使用ratio_frame
+			content_frame.columnconfigure(5, weight=1)
+		
 		self.frame_ratio = ratio_frame
-		ratio_frame.columnconfigure(5, weight=1)
 		
 		# 分类内部控件（除启用复选框外可整体禁用）
-		self.cb_ratio_inner_snap = ttk.Checkbutton(ratio_frame, text='不匹配吸附最近', variable=self.ratio_snap_var)
-		cb_tol_label = ttk.Label(ratio_frame, text='容差')
-		sp_rt=ttk.Spinbox(ratio_frame,from_=0.0,to=0.2,increment=0.005,format='%.3f',width=6,textvariable=self.ratio_tol_var)
-		btn_reset_ratio=ttk.Button(ratio_frame,text='恢复默认',width=10,command=lambda: self.ratio_custom_var.set('16:9,3:2,4:3,1:1,21:9'))
-		lbl_ratio_input=ttk.Label(ratio_frame,text='自定义(16:9 16x10 ...)')
-		ent_ratio=ttk.Entry(ratio_frame,textvariable=self.ratio_custom_var,width=58)
+		self.cb_ratio_inner_snap = (ctk.CTkCheckBox(content_frame, text='不匹配吸附最近', variable=self.ratio_snap_var) if use_ctk_left and ctk is not None else ttk.Checkbutton(content_frame, text='不匹配吸附最近', variable=self.ratio_snap_var))
+		cb_tol_label = (ctk.CTkLabel(content_frame, text='容差') if use_ctk_left and ctk is not None else ttk.Label(content_frame, text='容差'))
+		if use_ctk_left and ctk is not None:
+			def _on_ratio_tol_change(v):
+				try:
+					val = float(v)
+				except Exception:
+					val = self.ratio_tol_var.get()
+				val = max(0.0, min(0.2, val))
+				self.ratio_tol_var.set(round(val, 3))
+			sp_rt = ctk.CTkSlider(content_frame, from_=0.0, to=0.2, number_of_steps=40, command=_on_ratio_tol_change, width=140)
+			sp_rt.set(float(self.ratio_tol_var.get()))
+			btn_reset_ratio=(ctk.CTkButton(content_frame,text='恢复默认',width=10,command=lambda: self.ratio_custom_var.set('16:9,3:2,4:3,1:1,21:9')))
+			lbl_ratio_input=(ctk.CTkLabel(content_frame,text='自定义(16:9 16x10 ...)'))
+			ent_ratio=(ctk.CTkEntry(content_frame,textvariable=self.ratio_custom_var,width=360))
+		else:
+			sp_rt=ttk.Spinbox(content_frame,from_=0.0,to=0.2,increment=0.005,format='%.3f',width=6,textvariable=self.ratio_tol_var)
+			btn_reset_ratio=ttk.Button(content_frame,text='恢复默认',width=10,command=lambda: self.ratio_custom_var.set('16:9,3:2,4:3,1:1,21:9'))
+			lbl_ratio_input=ttk.Label(content_frame,text='自定义(16:9 16x10 ...)')
+			ent_ratio=ttk.Entry(content_frame,textvariable=self.ratio_custom_var,width=58)
 		# 保存引用供后续 tooltip / 状态控制
 		self._ratio_sp_rt=sp_rt; self._ratio_ent=ent_ratio; self._ratio_btn_reset=btn_reset_ratio; self._ratio_snap=self.cb_ratio_inner_snap; self._ratio_lbl_input=lbl_ratio_input; self._ratio_lbl_tol=cb_tol_label
 		# 布局
@@ -1565,7 +2074,7 @@ class ImageToolApp:
 		lbl_ratio_input.grid(row=1,column=0,sticky='e',pady=(4,0))
 		ent_ratio.grid(row=1,column=1,columnspan=4,sticky='we',pady=(4,2))
 		# 预设比例按钮行
-		preset_frame=ttk.Frame(ratio_frame)
+		preset_frame=(ctk.CTkFrame(content_frame) if use_ctk_left and ctk is not None else ttk.Frame(content_frame))
 		preset_frame.grid(row=2,column=0,columnspan=5,sticky='w',pady=(2,2))
 		presets=['16:9','16:10','4:3','3:2','5:4','21:9','1:1']
 		def _toggle_ratio(val:str):
@@ -1581,54 +2090,82 @@ class ImageToolApp:
 			self.ratio_custom_var.set(','.join(parts))
 		self._ratio_preset_buttons=[]
 		for r in presets:
-			btn=ttk.Button(preset_frame,text=r,width=6,command=lambda v=r: _toggle_ratio(v))
+			btn=(ctk.CTkButton(preset_frame,text=r,width=60,command=lambda v=r: _toggle_ratio(v)) if use_ctk_left and ctk is not None else ttk.Button(preset_frame,text=r,width=6,command=lambda v=r: _toggle_ratio(v)))
 			btn.pack(side='left',padx=1)
 			self._ratio_preset_buttons.append(btn)
-		btn_clear=ttk.Button(preset_frame,text='清空',width=6,command=lambda: self.ratio_custom_var.set(''))
+		btn_clear=(ctk.CTkButton(preset_frame,text='清空',width=60,command=lambda: self.ratio_custom_var.set('')) if use_ctk_left and ctk is not None else ttk.Button(preset_frame,text='清空',width=6,command=lambda: self.ratio_custom_var.set('')))
 		btn_clear.pack(side='left',padx=(8,0))
 		self._ratio_btn_clear=btn_clear
 		
 		# 形状分类 (新区域)
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,4))
-		shape_frame=ttk.LabelFrame(self.left_frame,text='形状分类'); shape_frame.pack(fill='x',pady=(0,10))
+		if ctk is not None:
+			shape_frame = ctk.CTkFrame(self.left_frame)
+			shape_frame.pack(fill='x',pady=(0,10))
+			
+			# 标题
+			title_label = ctk.CTkLabel(shape_frame, text='形状分类', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			shape_content_frame = ctk.CTkFrame(shape_frame)
+			shape_content_frame.pack(fill='x', padx=8, pady=(0, 4))
+			shape_content_frame.columnconfigure(5, weight=1)
+		else:
+			shape_frame=ttk.LabelFrame(self.left_frame,text='形状分类')
+			shape_frame.pack(fill='x',pady=(0,10))
+			shape_content_frame = shape_frame  # 传统版本直接使用shape_frame
+			shape_content_frame.columnconfigure(5, weight=1)
+		
 		self.frame_shape=shape_frame
-		shape_frame.columnconfigure(5,weight=1)
 		
 		# 第一行：容差设置
-		lbl_shape_tol=ttk.Label(shape_frame,text='容差')
+		lbl_shape_tol=(ctk.CTkLabel(shape_content_frame,text='容差') if ctk is not None else ttk.Label(shape_content_frame,text='容差'))
 		lbl_shape_tol.grid(row=0,column=0,sticky='e')
-		sp_shape_tol=ttk.Spinbox(shape_frame,from_=0.01,to=0.5,increment=0.01,textvariable=self.shape_tolerance_var,width=8,format='%.2f')
-		sp_shape_tol.grid(row=0,column=1,sticky='w',padx=(4,12))
+		if ctk is not None:
+			def _on_shape_tol_change(v):
+				try:
+					val = float(v)
+				except Exception:
+					val = self.shape_tolerance_var.get()
+				val = max(0.01, min(0.5, val))
+				self.shape_tolerance_var.set(round(val, 2))
+			sp_shape_tol = ctk.CTkSlider(shape_content_frame, from_=0.01, to=0.5, number_of_steps=49, command=_on_shape_tol_change, width=160)
+			sp_shape_tol.set(float(self.shape_tolerance_var.get()))
+			sp_shape_tol.grid(row=0,column=1,sticky='w',padx=(4,12))
+		else:
+			sp_shape_tol=ttk.Spinbox(shape_content_frame,from_=0.01,to=0.5,increment=0.01,textvariable=self.shape_tolerance_var,width=8,format='%.2f')
+			sp_shape_tol.grid(row=0,column=1,sticky='w',padx=(4,12))
 		# 容差描述移到了tooltip
 		
 		# 第二行：文件夹名称设置
-		lbl_shape_folder=ttk.Label(shape_frame,text='文件夹')
+		lbl_shape_folder=(ctk.CTkLabel(shape_content_frame,text='文件夹') if ctk is not None else ttk.Label(shape_content_frame,text='文件夹'))
 		lbl_shape_folder.grid(row=1,column=0,sticky='e',pady=(4,0))
 		
-		folder_settings_frame = ttk.Frame(shape_frame)
+		folder_settings_frame = (ctk.CTkFrame(shape_content_frame) if ctk is not None else ttk.Frame(shape_content_frame))
 		folder_settings_frame.grid(row=1,column=1,columnspan=4,sticky='we',pady=(4,2))
 		
-		lbl_square=ttk.Label(folder_settings_frame,text='方形:')
+		lbl_square=(ctk.CTkLabel(folder_settings_frame,text='方形:') if ctk is not None else ttk.Label(folder_settings_frame,text='方形:'))
 		lbl_square.pack(side='left')
-		ent_square=ttk.Entry(folder_settings_frame,textvariable=self.shape_square_name,width=8)
+		ent_square=(ctk.CTkEntry(folder_settings_frame,textvariable=self.shape_square_name,width=80) if ctk is not None else ttk.Entry(folder_settings_frame,textvariable=self.shape_square_name,width=8))
 		ent_square.pack(side='left',padx=(2,8))
 		
-		lbl_horizontal=ttk.Label(folder_settings_frame,text='横向:')
+		lbl_horizontal=(ctk.CTkLabel(folder_settings_frame,text='横向:') if ctk is not None else ttk.Label(folder_settings_frame,text='横向:'))
 		lbl_horizontal.pack(side='left')
-		ent_horizontal=ttk.Entry(folder_settings_frame,textvariable=self.shape_horizontal_name,width=8)
+		ent_horizontal=(ctk.CTkEntry(folder_settings_frame,textvariable=self.shape_horizontal_name,width=80) if ctk is not None else ttk.Entry(folder_settings_frame,textvariable=self.shape_horizontal_name,width=8))
 		ent_horizontal.pack(side='left',padx=(2,8))
 		
-		lbl_vertical=ttk.Label(folder_settings_frame,text='纵向:')
+		lbl_vertical=(ctk.CTkLabel(folder_settings_frame,text='纵向:') if ctk is not None else ttk.Label(folder_settings_frame,text='纵向:'))
 		lbl_vertical.pack(side='left')
-		ent_vertical=ttk.Entry(folder_settings_frame,textvariable=self.shape_vertical_name,width=8)
+		ent_vertical=(ctk.CTkEntry(folder_settings_frame,textvariable=self.shape_vertical_name,width=80) if ctk is not None else ttk.Entry(folder_settings_frame,textvariable=self.shape_vertical_name,width=8))
 		ent_vertical.pack(side='left',padx=(2,8))
 		
 		# 重置按钮
-		btn_reset_shape=ttk.Button(folder_settings_frame,text='重置',width=6,
-			command=lambda: [self.shape_square_name.set('zfx'),
-							self.shape_horizontal_name.set('hp'),
-							self.shape_vertical_name.set('sp'),
-							self.shape_tolerance_var.set(0.15)])
+		btn_reset_shape=(ctk.CTkButton(folder_settings_frame,text='重置',width=70) if ctk is not None else ttk.Button(folder_settings_frame,text='重置',width=6))
+		btn_reset_shape.configure(command=lambda: [self.shape_square_name.set('zfx'),
+						self.shape_horizontal_name.set('hp'),
+						self.shape_vertical_name.set('sp'),
+						self.shape_tolerance_var.set(0.15)])
 		btn_reset_shape.pack(side='left',padx=(8,0))
 		
 		# 保存引用供后续状态控制
@@ -1646,7 +2183,25 @@ class ImageToolApp:
 		
 		# 转换 (第二阶段)
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,4))
-		convert=ttk.LabelFrame(self.left_frame,text='格式转换'); convert.pack(fill='x',pady=(0,10))
+		# 启用左侧的CTk组件迁移
+		use_ctk_left = True  # 启用左侧CTk使用
+		
+		if use_ctk_left and ctk is not None:
+			convert=ctk.CTkFrame(self.left_frame)
+			convert.pack(fill='x',pady=(0,10))
+			
+			# 标题
+			title_label = ctk.CTkLabel(convert, text='格式转换', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			convert_content_frame = ctk.CTkFrame(convert)
+			convert_content_frame.pack(fill='x', padx=8, pady=(0, 4))
+		else:
+			convert=ttk.LabelFrame(self.left_frame,text='格式转换')
+			convert.pack(fill='x',pady=(0,10))
+			convert_content_frame = convert  # 传统版本直接使用convert
+		
 		self.frame_convert=convert
 		self.fmt_var=tk.StringVar(value=_rev_map(FMT_MAP)['webp'])
 		self.quality_var=tk.IntVar(value=100)
@@ -1659,36 +2214,45 @@ class ImageToolApp:
 		self.ico_keep_orig=tk.BooleanVar(value=False)
 		self.ico_size_vars={s:tk.BooleanVar(value=(s in (16,32,48,64))) for s in (16,32,48,64,128,256)}
 		self.ico_square_mode=tk.StringVar(value='fit')  # keep|center|topleft|fit
-		ttk.Label(convert,text='格式').grid(row=0,column=0,sticky='e')
-		cb_fmt=ttk.Combobox(convert,textvariable=self.fmt_var,values=list(FMT_MAP.keys()),width=12,state='readonly'); cb_fmt.grid(row=0,column=1,sticky='w',padx=(0,12))
+		(ctk.CTkLabel(convert_content_frame,text='格式') if use_ctk_left and ctk is not None else ttk.Label(convert_content_frame,text='格式')).grid(row=0,column=0,sticky='e')
+		cb_fmt=ttk.Combobox(convert_content_frame,textvariable=self.fmt_var,values=list(FMT_MAP.keys()),width=12,state='readonly'); cb_fmt.grid(row=0,column=1,sticky='w',padx=(0,12))
 		self.cb_fmt = cb_fmt  # 保存引用用于tooltip
-		ttk.Label(convert,text='质量').grid(row=0,column=2,sticky='e')
-		sc_q=ttk.Scale(convert,from_=1,to=100,orient='horizontal',variable=self.quality_var,length=220); sc_q.grid(row=0,column=3,sticky='we',padx=(2,6))
+		(ctk.CTkLabel(convert_content_frame,text='质量') if use_ctk_left and ctk is not None else ttk.Label(convert_content_frame,text='质量')).grid(row=0,column=2,sticky='e')
+		if use_ctk_left and ctk is not None:
+			sc_q=ctk.CTkSlider(convert_content_frame,from_=1,to=100,number_of_steps=99,command=lambda v: self.quality_var.set(int(float(v))), width=220)
+			sc_q.set(self.quality_var.get())
+			sc_q.grid(row=0,column=3,sticky='we',padx=(2,6))
+		else:
+			sc_q=ttk.Scale(convert_content_frame,from_=1,to=100,orient='horizontal',variable=self.quality_var,length=220); sc_q.grid(row=0,column=3,sticky='we',padx=(2,6))
 		self.sc_q = sc_q  # 保存引用用于tooltip
-		sp_q=ttk.Spinbox(convert,from_=1,to=100,textvariable=self.quality_var,width=5); sp_q.grid(row=0,column=4,sticky='w',padx=(0,8))
+		if use_ctk_left and ctk is not None:
+			sp_q=ctk.CTkEntry(convert_content_frame,textvariable=self.quality_var,width=60)
+			sp_q.grid(row=0,column=4,sticky='w',padx=(0,8))
+		else:
+			sp_q=ttk.Spinbox(convert_content_frame,from_=1,to=100,textvariable=self.quality_var,width=5); sp_q.grid(row=0,column=4,sticky='w',padx=(0,8))
 		self.sp_q = sp_q  # 保存引用用于tooltip
-		cb_same=ttk.Checkbutton(convert,text='同格式也重存',variable=self.process_same_var); cb_same.grid(row=0,column=5,sticky='w')
+		cb_same=(ctk.CTkCheckBox(convert_content_frame,text='同格式也重存',variable=self.process_same_var) if use_ctk_left and ctk is not None else ttk.Checkbutton(convert_content_frame,text='同格式也重存',variable=self.process_same_var)); cb_same.grid(row=0,column=5,sticky='w')
 		self.cb_same = cb_same  # 保存引用用于tooltip
-		cb_png3=ttk.Checkbutton(convert,text='PNG3压缩',variable=self.png3_var); cb_png3.grid(row=0,column=6,sticky='w')
+		cb_png3=(ctk.CTkCheckBox(convert_content_frame,text='PNG3压缩',variable=self.png3_var) if use_ctk_left and ctk is not None else ttk.Checkbutton(convert_content_frame,text='PNG3压缩',variable=self.png3_var)); cb_png3.grid(row=0,column=6,sticky='w')
 		self.cb_png3 = cb_png3  # 保存引用用于tooltip
 		
 		# 第二行：动图压缩方法
-		ttk.Label(convert,text='动图压缩').grid(row=1,column=0,sticky='e',pady=(4,0))
-		cb_webp_comp=ttk.Combobox(convert,textvariable=self.webp_compression_var,values=list(WEBP_COMPRESSION_MAP.keys()),width=12,state='readonly')
+		(ctk.CTkLabel(convert_content_frame,text='动图压缩') if use_ctk_left and ctk is not None else ttk.Label(convert_content_frame,text='动图压缩')).grid(row=1,column=0,sticky='e',pady=(4,0))
+		cb_webp_comp=ttk.Combobox(convert_content_frame,textvariable=self.webp_compression_var,values=list(WEBP_COMPRESSION_MAP.keys()),width=12,state='readonly')
 		cb_webp_comp.grid(row=1,column=1,sticky='w',padx=(0,12),pady=(4,0))
 		self.cb_webp_comp = cb_webp_comp  # 保存引用用于tooltip
 		
 		# ICO 尺寸输入 (仅当选择 ico 有效) - 移到第三行
-		lbl_ico=ttk.Label(convert,text='ICO尺寸')
-		ent_ico=ttk.Entry(convert,textvariable=self.ico_sizes_var,width=22)
+		lbl_ico=ttk.Label(convert_content_frame,text='ICO尺寸')
+		ent_ico=ttk.Entry(convert_content_frame,textvariable=self.ico_sizes_var,width=22)
 		self.ent_ico = ent_ico  # 保存引用用于tooltip
 		lbl_ico.grid(row=2,column=0,sticky='e',pady=(4,0))
 		ent_ico.grid(row=2,column=1,sticky='w',pady=(4,0))
 		# 复选框区域
-		ico_box=ttk.Frame(convert)
+		ico_box=ttk.Frame(convert_content_frame)
 		ico_box.grid(row=2,column=2,columnspan=5,sticky='w',pady=(4,0))
 		# 非方图处理方式
-		frame_sq=ttk.Frame(convert)
+		frame_sq=ttk.Frame(convert_content_frame)
 		frame_sq.grid(row=3,column=0,columnspan=8,sticky='w',pady=(2,2))
 		ttk.Label(frame_sq,text='非方图:').pack(side='left')
 		sq_choices=[('保持','keep'),('中心裁切','center'),('左上裁切','topleft'),('等比例填充','fit')]
@@ -1709,7 +2273,26 @@ class ImageToolApp:
 		
 		# 去重 (第三阶段)
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,4))
-		dedupe=ttk.LabelFrame(self.left_frame,text='去重设置'); dedupe.pack(fill='x',pady=(0,10))
+		if ctk is not None:
+			dedupe = ctk.CTkFrame(self.left_frame)
+			dedupe.pack(fill='x',pady=(0,10))
+			
+			# 标题
+			title_label = ctk.CTkLabel(dedupe, text='去重设置', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			dedupe_content_frame = ctk.CTkFrame(dedupe)
+			dedupe_content_frame.pack(fill='x', padx=8, pady=(0, 4))
+			for i in range(11): 
+				dedupe_content_frame.columnconfigure(i, weight=0)
+		else:
+			dedupe=ttk.LabelFrame(self.left_frame,text='去重设置')
+			dedupe.pack(fill='x',pady=(0,10))
+			dedupe_content_frame = dedupe  # 传统版本直接使用dedupe
+			for i in range(11): 
+				dedupe_content_frame.columnconfigure(i, weight=0)
+		
 		self.frame_dedupe=dedupe
 		# 去重阈值默认 3
 		self.threshold_var=tk.IntVar(value=3)
@@ -1717,26 +2300,45 @@ class ImageToolApp:
 		# 去重动作默认 删除重复
 		self.dedup_action_var=tk.StringVar(value=_rev_map(ACTION_MAP)['delete'])
 		self.move_dir_var=tk.StringVar()
-		for i in range(11): dedupe.columnconfigure(i,weight=0)
-		ttk.Label(dedupe,text='阈值').grid(row=0,column=0,sticky='e')
-		sp_th=ttk.Spinbox(dedupe,from_=0,to=32,textvariable=self.threshold_var,width=5); sp_th.grid(row=0,column=1,sticky='w',padx=(0,8))
+		(ctk.CTkLabel(dedupe_content_frame,text='阈值') if ctk is not None else ttk.Label(dedupe_content_frame,text='阈值')).grid(row=0,column=0,sticky='e')
+		if ctk is not None:
+			def _on_th_change(v):
+				try:
+					val = int(float(v))
+				except Exception:
+					val = self.threshold_var.get()
+				val = max(0, min(32, val))
+				self.threshold_var.set(val)
+			sp_th = ctk.CTkSlider(dedupe_content_frame, from_=0, to=32, number_of_steps=32, command=_on_th_change, width=140)
+			sp_th.set(self.threshold_var.get())
+			sp_th.grid(row=0,column=1,sticky='w',padx=(0,8))
+		else:
+			sp_th=ttk.Spinbox(dedupe_content_frame,from_=0,to=32,textvariable=self.threshold_var,width=5); sp_th.grid(row=0,column=1,sticky='w',padx=(0,8))
 		self.sp_th = sp_th  # 保存引用用于tooltip
-		ttk.Label(dedupe,text='保留').grid(row=0,column=2,sticky='e')
-		cb_keep=ttk.Combobox(dedupe,textvariable=self.keep_var,values=list(KEEP_MAP.keys()),width=12,state='readonly'); cb_keep.grid(row=0,column=3,sticky='w',padx=(0,8))
+		(ctk.CTkLabel(dedupe_content_frame,text='保留') if ctk is not None else ttk.Label(dedupe_content_frame,text='保留')).grid(row=0,column=2,sticky='e')
+		cb_keep=ttk.Combobox(dedupe_content_frame,textvariable=self.keep_var,values=list(KEEP_MAP.keys()),width=12,state='readonly'); cb_keep.grid(row=0,column=3,sticky='w',padx=(0,8))
 		self.cb_keep = cb_keep  # 保存引用用于tooltip
-		ttk.Label(dedupe,text='动作').grid(row=0,column=4,sticky='e')
-		cb_action=ttk.Combobox(dedupe,textvariable=self.dedup_action_var,values=list(ACTION_MAP.keys()),width=10,state='readonly'); cb_action.grid(row=0,column=5,sticky='w',padx=(0,8))
+		(ctk.CTkLabel(dedupe_content_frame,text='动作') if ctk is not None else ttk.Label(dedupe_content_frame,text='动作')).grid(row=0,column=4,sticky='e')
+		cb_action=ttk.Combobox(dedupe_content_frame,textvariable=self.dedup_action_var,values=list(ACTION_MAP.keys()),width=10,state='readonly'); cb_action.grid(row=0,column=5,sticky='w',padx=(0,8))
 		self.cb_action = cb_action  # 保存引用用于tooltip
 		col_mv=6
-		ttk.Label(dedupe,text='移动到').grid(row=0,column=col_mv,sticky='e')
-		self.move_dir_entry=ttk.Entry(dedupe,textvariable=self.move_dir_var,width=24); self.move_dir_entry.grid(row=0,column=col_mv+1,sticky='w')
-		self.move_dir_btn=ttk.Button(dedupe,text='选',command=self._pick_move_dir,width=4); self.move_dir_btn.grid(row=0,column=col_mv+2,sticky='w',padx=(4,0))
-		convert.columnconfigure(3,weight=1)
+		(ctk.CTkLabel(dedupe_content_frame,text='移动到') if ctk is not None else ttk.Label(dedupe_content_frame,text='移动到')).grid(row=0,column=col_mv,sticky='e')
+		self.move_dir_entry=(ctk.CTkEntry(dedupe_content_frame,textvariable=self.move_dir_var,width=220) if ctk is not None else ttk.Entry(dedupe_content_frame,textvariable=self.move_dir_var,width=24)); self.move_dir_entry.grid(row=0,column=col_mv+1,sticky='w')
+		self.move_dir_btn=(ctk.CTkButton(dedupe_content_frame,text='选',command=self._pick_move_dir,width=60) if ctk is not None else ttk.Button(dedupe_content_frame,text='选',command=self._pick_move_dir,width=4)); self.move_dir_btn.grid(row=0,column=col_mv+2,sticky='w',padx=(4,0))
+		convert_content_frame.columnconfigure(3,weight=1)
 		for i in range(8):
-			if i!=3: convert.columnconfigure(i,weight=0)
+			if i!=3: convert_content_frame.columnconfigure(i,weight=0)
 		# 重命名
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,4))
-		rename=ttk.LabelFrame(self.left_frame,text='重命名'); rename.pack(fill='x',pady=(0,10))
+		# 启用左侧的CTk组件迁移
+		use_ctk_left = True  # 启用左侧CTk使用
+		
+		if use_ctk_left and ctk is not None:
+			rename=ctk.CTkFrame(self.left_frame)
+			ctk.CTkLabel(rename, text='重命名').pack(anchor='w', padx=8, pady=(4,2))
+			rename.pack(fill='x',pady=(0,10))
+		else:
+			rename=ttk.LabelFrame(self.left_frame,text='重命名'); rename.pack(fill='x',pady=(0,10))
 		self.frame_rename=rename
 		self.pattern_var=tk.StringVar(value='{name}_{index}.{fmt}')
 		self.start_var=tk.IntVar(value=1)
@@ -1890,8 +2492,16 @@ class ImageToolApp:
 
 		# 进度状态显示
 		ttk.Separator(self.left_frame,orient='horizontal').pack(fill='x',pady=(0,6))
-		self.progress=ttk.Progressbar(self.left_frame,maximum=100); self.progress.pack(fill='x',pady=(0,4))
-		self.status_var=tk.StringVar(value='就绪'); ttk.Label(self.left_frame,textvariable=self.status_var,foreground='blue').pack(fill='x')
+		if ctk is not None:
+			self.progress = ctk.CTkProgressBar(self.left_frame)
+			self.progress_is_ctk = True
+			self.progress.set(0)
+			self.progress.pack(fill='x',pady=(0,4))
+			self.status_var=tk.StringVar(value='就绪')
+			ctk.CTkLabel(self.left_frame, textvariable=self.status_var).pack(fill='x')
+		else:
+			self.progress=ttk.Progressbar(self.left_frame,maximum=100); self.progress.pack(fill='x',pady=(0,4))
+			self.status_var=tk.StringVar(value='就绪'); ttk.Label(self.left_frame,textvariable=self.status_var,foreground='blue').pack(fill='x')
 			
 		# 设置变量跟踪
 		self.classify_ratio_var.trace_add('write', lambda *a: self._on_classify_ratio_changed())
@@ -2016,11 +2626,40 @@ class ImageToolApp:
 		"""切换跳过格式功能的启用状态"""
 		enabled = self.skip_formats_enabled.get()
 		for cb in self.skip_format_checkboxes:
-			cb.config(state='normal' if enabled else 'disabled')
+			if ctk is not None and hasattr(cb, 'configure'):
+				# CTk组件使用configure方法
+				try:
+					cb.configure(state='normal' if enabled else 'disabled')
+				except:
+					# 如果CTk不支持state属性，则跳过
+					pass
+			else:
+				# 传统ttk组件使用config方法
+				cb.config(state='normal' if enabled else 'disabled')
+		
 		if hasattr(self, 'skip_custom_entry'):
-			self.skip_custom_entry.config(state='normal' if enabled else 'disabled')
+			if ctk is not None and hasattr(self.skip_custom_entry, 'configure'):
+				# CTk组件
+				try:
+					self.skip_custom_entry.configure(state='normal' if enabled else 'disabled')
+				except:
+					# 如果CTk不支持state属性，则跳过
+					pass
+			else:
+				# 传统ttk组件
+				self.skip_custom_entry.config(state='normal' if enabled else 'disabled')
+		
 		if hasattr(self, 'skip_convert_only_cb'):
-			self.skip_convert_only_cb.config(state='normal' if enabled else 'disabled')
+			if ctk is not None and hasattr(self.skip_convert_only_cb, 'configure'):
+				# CTk组件
+				try:
+					self.skip_convert_only_cb.configure(state='normal' if enabled else 'disabled')
+				except:
+					# 如果CTk不支持state属性，则跳过
+					pass
+			else:
+				# 传统ttk组件
+				self.skip_convert_only_cb.config(state='normal' if enabled else 'disabled')
 
 	def _get_skip_formats(self, for_convert_only=False):
 		"""获取要跳过的格式集合
@@ -2209,10 +2848,23 @@ class ImageToolApp:
 		self.worker=threading.Thread(target=self._pipeline_with_init,daemon=True); self.worker.start()
 
 	def _cancel(self):
+		"""请求取消当前任务。
+
+		将全局停止标志置位并更新状态栏文本。后台线程会轮询该标志并尽快中止。
+		"""
 		self.stop_flag.set(); self.status_var.set('请求取消...')
 
 	def _open_last_out(self):
-		# 预览模式下无条件优先打开缓存目录 (更符合“查看预览结果”需求)
+		"""打开最近一次使用的输出目录或当前预览缓存目录。
+
+		优先级:
+		1) 预览模式: 打开缓存目录 `.preview_cache`;
+		2) 否则: 打开最近一次输出目录或当前输出框中的目录。
+
+		在 Windows 使用 `os.startfile` 打开，macOS 使用 `open`，Linux 使用 `xdg-open`。
+		当路径无效或不存在时更新状态提示。
+		"""
+		# 预览模式下无条件优先打开缓存目录 (更符合"查看预览结果"需求)
 		if not getattr(self, 'write_to_output', True):
 			try:
 				self._ensure_cache_dir()
@@ -2275,6 +2927,13 @@ class ImageToolApp:
 			pass
 
 	def _ensure_cache_dir(self):
+		"""确保预览/中间缓存目录存在并完成基础结构初始化。
+
+		行为:
+		- 在输出目录下创建 `.preview_cache` 目录并设置隐藏属性;
+		- 创建 `_trash` 目录用于模拟删除;
+		- 创建 `_final` 目录作为阶段性最终结果根目录，避免嵌套 `_final/_final`。
+		"""
 		if self.cache_dir and os.path.exists(self.cache_dir):
 			return
 		out_dir = self.out_var.get().strip() or os.getcwd()
@@ -2305,6 +2964,11 @@ class ImageToolApp:
 			except Exception: pass
 
 	def _clear_cache(self):
+		"""清理并删除缓存目录结构。
+
+		安全移除 `.preview_cache` 目录及其子目录，重置与缓存相关的内部路径引用。
+		异常忽略以保证不会影响主流程。
+		"""
 		if self.cache_dir and os.path.exists(self.cache_dir):
 			try:
 				shutil.rmtree(self.cache_dir)
@@ -2315,6 +2979,13 @@ class ImageToolApp:
 				pass
 
 	def _on_close(self):
+		"""窗口关闭回调。
+
+		执行以下清理:
+		- 停止预览线程并取消动画计时器;
+		- 清理缓存目录;
+		- 销毁根窗口。
+		"""
 		# 停止预览线程
 		if hasattr(self, 'preview_thread') and self.preview_thread:
 			self.preview_thread.stop()
@@ -2808,7 +3479,16 @@ class ImageToolApp:
 			self.q.put(f'ERROR {error_msg}')
 
 	def _pipeline(self):
-		"""执行顺序: 0复制输入到缓存 -> 1分类(多文件且启用) -> 2转换 -> 3去重(多文件且启用) -> 4重命名 -> 5复制到最终输出(仅正常模式)"""
+		"""处理主流水线。
+
+		执行顺序:
+		0) 复制输入到缓存;
+		1) 比例/形状分类(多文件且启用);
+		2) 转换;
+		3) 去重(多文件且启用);
+		4) 重命名;
+		5) 最终复制到输出(仅正式模式)。
+		"""
 		try:
 			files=self._all_files
 			
@@ -2920,6 +3600,18 @@ class ImageToolApp:
 
 	# 去重
 	def _dedupe_stage(self, files:List[str])->List[str]:
+		"""执行重复图片检测并根据策略处理重复项。
+
+		使用平均哈希与差分哈希结合汉明距离阈值将相似图片归为一组，
+		按配置的保留策略选出代表图片，并对其他成员按动作执行删除或移动。
+		预览模式下删除将被模拟为移动到 `_trash`。
+
+		Args:
+			files (List[str]): 待检测的文件路径列表。
+
+		Returns:
+			List[str]: 经过去重后保留的文件路径列表（包含各组保留项与非重复项）。
+		"""
 		th=self.threshold_var.get()
 		keep_mode=KEEP_MAP.get(self.keep_var.get(), 'largest')
 		action=ACTION_MAP.get(self.dedup_action_var.get(),'list')
@@ -2992,6 +3684,20 @@ class ImageToolApp:
 		return kept
 
 	def _convert_rename_stage(self, files:List[str]):
+		"""执行"转换 + 重命名"的两阶段处理。
+
+		流程:
+		1) 判断是否需要转换并生成中间产物路径;
+		2) 依据重命名模式生成最终文件名（支持每目录独立编号）；
+		3) 预览模式写入缓存目录，正式模式写入输出目录；
+		4) 分别记录转换与重命名阶段日志，便于溯源错误。
+
+		Args:
+			files (List[str]): 输入文件路径列表（通常位于缓存 input 目录）。
+
+		Returns:
+			List[str]: 成功产出的最终文件路径列表。
+		"""
 		# 强健的格式获取，避免KeyError
 		fmt_key = self.fmt_var.get()
 		fmt = FMT_MAP.get(fmt_key)
@@ -3052,7 +3758,7 @@ class ImageToolApp:
 					pass
 			if warn_needed and self.ico_square_mode.get()=='keep':
 				self.q.put('STATUS 检测到非方图, ICO 可能被拉伸, 可选择裁切/填充方式')
-		# 按目录分组以实现“分类后每个目录独立排序编号”
+		# 按目录分组以实现"分类后每个目录独立排序编号"
 		if self.enable_rename.get():
 			from collections import defaultdict
 			dir_map=defaultdict(list)
@@ -3512,6 +4218,14 @@ class ImageToolApp:
 		return result
 
 	def _calc_preview_signature(self):
+		"""计算当前配置与输入集的预览签名。
+
+		签名包含主要影响结果的选项值（分类、转换、去重、重命名等）以及输入文件
+		的 mtime/size 快照，用于判断预览结果是否需要重新生成。
+
+		Returns:
+			str: 32 位十六进制 MD5 字符串。
+		"""
 		parts=[]
 		def add(k,v): parts.append(f"{k}={v}")
 		add('classify', int(self.classify_ratio_var.get()))
@@ -3554,6 +4268,17 @@ class ImageToolApp:
 		return digest
 
 	def _convert_stage_only(self, files:list[str])->list[str]:
+		"""仅执行格式转换阶段（不含重命名）。
+
+		支持"同格式也重存"、"PNG3 调色板压缩"、WebP 动图压缩策略以及按格式白名单跳过转换。
+		预览模式输出至 `.preview_cache/_final`，正式模式稍后统一复制到输出目录。
+
+		Args:
+			files (list[str]): 输入文件路径列表（通常位于缓存 input 目录）。
+
+		Returns:
+			list[str]: 转换后的文件路径列表；对于被跳过的文件返回复制后的路径或原路径。
+		"""
 		# 强健的格式获取，避免KeyError
 		fmt_key = self.fmt_var.get()
 		fmt = FMT_MAP.get(fmt_key)
@@ -3915,6 +4640,16 @@ class ImageToolApp:
 
 	# 队列 + 预览
 	def _drain(self):
+		"""从队列中持续拉取消息并更新UI、日志与统计。
+
+		处理的消息类型包括但不限于:
+		- HASH/PROG/PROGRESS_MAX/STATUS: 进度与状态更新;
+		- LOG: 结构化日志行，支持筛选与着色;
+		- INFO/WARNING/ERROR: 信息/警告/错误提示;
+		- PERMISSION_ERROR: 弹出权限错误对话框。
+
+		该方法由 `after` 定时调用，确保在主线程安全地更新界面。
+		"""
 		try:
 			while True:
 				m=self.q.get_nowait()
@@ -3925,13 +4660,23 @@ class ImageToolApp:
 					pass
 				if m.startswith('HASH '):
 					_,d,total=m.split(); d=int(d); total=int(total)
-					self.progress['maximum']=total; self.progress['value']=d
-					pct=int(d/total*100) if total else 0
+					if self.progress_is_ctk:
+						self._progress_max = total or 1
+						self.progress.set((d or 0)/self._progress_max)
+						pct=int(d/self._progress_max*100)
+					else:
+						self.progress['maximum']=total; self.progress['value']=d
+						pct=int(d/total*100) if total else 0
 					self.status_var.set(f'去重哈希 {pct}% ({d}/{total})')
 				elif m.startswith('PROG '):
 					_,d,total=m.split(); d=int(d); total=int(total)
-					self.progress['maximum']=total; self.progress['value']=d
-					pct=int(d/total*100) if total else 0
+					if self.progress_is_ctk:
+						self._progress_max = total or 1
+						self.progress.set((d or 0)/self._progress_max)
+						pct=int(d/self._progress_max*100)
+					else:
+						self.progress['maximum']=total; self.progress['value']=d
+						pct=int(d/total*100) if total else 0
 					self.status_var.set(f'处理 {pct}% ({d}/{total})')
 				elif m.startswith('STATUS '):
 					self.status_var.set(m[7:])
@@ -3960,9 +4705,13 @@ class ImageToolApp:
 						messagebox.showerror('错误', error_msg)
 				elif m.startswith('PROGRESS_MAX '):
 					# 设置进度条最大值
-					max_val = int(m[13:])
-					self.progress['maximum'] = max_val
-					self.progress['value'] = 0
+					max_val = int(m[13:]) or 1
+					if self.progress_is_ctk:
+						self._progress_max = max_val
+						self.progress.set(0)
+					else:
+						self.progress['maximum'] = max_val
+						self.progress['value'] = 0
 				elif m.startswith('PERMISSION_ERROR\t'):
 					# 处理权限错误
 					try:
@@ -3997,9 +4746,34 @@ class ImageToolApp:
 						
 						vals=(stage_disp, os.path.basename(src), os.path.basename(dst), info)
 						row_tags=(src,dst,stag)
-						self._raw_logs.append((stage,src,dst,info,vals,row_tags))
-						if self._log_row_visible(stage,info,vals):
-							self.log.insert('', 'end', values=vals, tags=row_tags)
+						
+						# 保存原始日志数据（增强版，包含更多信息）
+						raw_log_item = {
+							'stage': stage,
+							'src_full': src,
+							'dst_full': dst,
+							'src_basename': os.path.basename(src),
+							'dst_basename': os.path.basename(dst),
+							'info': info,
+							'stage_disp': stage_disp,
+							'values': vals,
+							'tags': row_tags,
+							'stage_tag': stag
+						}
+						
+						if not hasattr(self, '_raw_logs'):
+							self._raw_logs = []
+						self._raw_logs.append(raw_log_item)
+						
+						# 检查行是否应该显示
+						if self._log_row_visible(stage, info, vals):
+							# 根据当前使用的日志组件添加行
+							if hasattr(self, 'log_view') and self.log_view:
+								# CTk版本：添加到CTkLogView
+								self.log_view.insert_row(vals, stag)
+							elif hasattr(self, 'log') and hasattr(self.log, 'insert'):
+								# 传统版本：添加到Treeview
+								self.log.insert('', 'end', values=vals, tags=row_tags)
 					except Exception:
 						pass
 		except queue.Empty:
@@ -4007,6 +4781,69 @@ class ImageToolApp:
 		finally:
 			self.root.after(150,self._drain)
 
+	def _on_ctk_log_select(self, selected_data):
+		"""CTk日志选择事件处理"""
+		if selected_data:
+			self._handle_ctk_log_selection(selected_data)
+	
+	def _handle_ctk_log_selection(self, row_data):
+		"""处理CTk日志行选择"""
+		try:
+			stage, src, dst, info = row_data[:4]  # 确保有足够的数据
+			
+			# 模拟传统的selection处理
+			# 获取完整路径信息（从原始日志数据中查找）
+			src_full = ''
+			dst_full_logged = ''
+			
+			# 查找匹配的原始日志项
+			for raw_log in getattr(self, '_raw_logs', []):
+				if (raw_log.get('stage') == stage and 
+					raw_log.get('src_basename') == src and 
+					raw_log.get('dst_basename') == dst):
+					src_full = raw_log.get('src_full', '')
+					dst_full_logged = raw_log.get('dst_full', '')
+					break
+			
+			# 检测失败项并显示错误信息
+			if "失败" in info:
+				self._show_error_in_preview(src, info)
+				return
+			
+			# 源与结果路径推断（复用原逻辑）
+			if not getattr(self, 'write_to_output', True):
+				# 缓存中的结果
+				dst_candidates = [os.path.join(self.cache_dir, dst)]
+				if not os.path.splitext(dst)[1]:  # 去重组行
+					dst_candidates.insert(0, os.path.join(self.cache_dir, os.path.basename(src_full)))
+			else:
+				out_dir = self.out_var.get().strip() or self.in_var.get().strip()
+				dst_candidates = []
+				if dst_full_logged and os.path.isfile(dst_full_logged):
+					dst_candidates.append(dst_full_logged)
+				dst_candidates.append(os.path.join(out_dir, dst))
+				if not os.path.splitext(dst)[1]:
+					dst_candidates.append(src_full)
+			
+			# 源候选
+			src_candidates = [src_full]
+			
+			# 取存在的源与结果
+			def first_exist(lst):
+				for p in lst:
+					if p and os.path.exists(p):
+						return p
+				return None
+			
+			src_path = first_exist(src_candidates)
+			result_path = first_exist(dst_candidates)
+			
+			# 使用预览线程处理图片加载
+			self.preview_thread.add_preview_task(src_path, result_path)
+		
+		except Exception as e:
+			print(f"处理CTk日志选择时出错: {e}")
+	
 	def _on_select_row(self,_=None):
 		sel=self.log.selection();
 		if not sel: return
@@ -4200,7 +5037,7 @@ class ImageToolApp:
 			return None
 
 	def _simulate_delete(self, path:str):
-		"""预览模式: 将“删除”文件复制到缓存模拟回收站目录 (_trash)。"""
+		"""预览模式: 将"删除"文件复制到缓存模拟回收站目录 (_trash)。"""
 		try:
 			self._ensure_cache_dir()
 			if not self.cache_trash_dir:
@@ -4370,10 +5207,38 @@ class ImageToolApp:
 
 	def _on_change_log_filter(self,*a):
 		if not hasattr(self,'_raw_logs'): return
-		for iid in self.log.get_children(): self.log.delete(iid)
-		for stage,src,dst,info,vals,tags in self._raw_logs:
-			if self._log_row_visible(stage,info,vals):
-				self.log.insert('', 'end', values=vals, tags=tags)
+		
+		# 清空现有显示
+		if hasattr(self, 'log_view') and self.log_view:
+			# CTk版本：清空CTkLogView
+			self.log_view.clear()
+		elif hasattr(self, 'log') and hasattr(self.log, 'get_children'):
+			# 传统版本：清空Treeview
+			for iid in self.log.get_children():
+				self.log.delete(iid)
+		
+		# 重新添加符合条件的行
+		for raw_log in self._raw_logs:
+			if isinstance(raw_log, dict):
+				# 新格式
+				stage = raw_log['stage']
+				info = raw_log['info']
+				vals = raw_log['values']
+				stag = raw_log['stage_tag']
+				tags = raw_log['tags']
+			else:
+				# 旧格式兼容
+				stage, src, dst, info, vals, tags = raw_log
+				stag = tags[2] if len(tags) > 2 else 'STAGE_INFO'
+			
+			if self._log_row_visible(stage, info, vals):
+				# 根据当前使用的日志组件添加行
+				if hasattr(self, 'log_view') and self.log_view:
+					# CTk版本：添加到CTkLogView
+					self.log_view.insert_row(vals, stag)
+				elif hasattr(self, 'log') and hasattr(self.log, 'insert'):
+					# 传统版本：添加到Treeview
+					self.log.insert('', 'end', values=vals, tags=tags)
 
 	def ico_square_mode_code(self):
 		return self.ico_square_mode.get() if hasattr(self,'ico_square_mode') else 'keep'
@@ -4383,6 +5248,36 @@ class ImageToolApp:
 		if hasattr(self,'log_filter_kw'): self.log_filter_kw.set('')
 		if hasattr(self,'log_filter_fail'): self.log_filter_fail.set(False)
 		self._on_change_log_filter()
+
+	def _test_ctk_log(self):
+		"""测试CTk日志显示功能，生成各种类型的日志条目"""
+		import time
+		
+		# 测试不同阶段的日志条目
+		test_entries = [
+			('CLASSIFY', 'test1.jpg', 'Classified/Horizontal/test1.jpg', '分类：水平图片'),
+			('CLASSIFY', 'test2.png', 'Classified/Square/test2.png', '分类：正方形图片'),
+			('CLASSIFY', 'test3.gif', 'Classified/Vertical/test3.gif', '分类：垂直图片'),
+			('DEDUP', 'dup1.jpg', '', '删除：重复文件'),
+			('DEDUP', 'dup2.png', 'unique2.png', '保留：唯一文件'),
+			('CONVERT', 'image1.bmp', 'image1.webp', '转换：BMP -> WebP'),
+			('CONVERT', 'image2.tiff', 'image2.png', '转换：TIFF -> PNG'),
+			('CONVERT', 'failed.gif', '', '转换失败：不支持的格式'),
+			('RENAME', 'IMG_001.jpg', 'photo_001.jpg', '重命名：标准化命名'),
+			('RENAME', 'DSC_0123.png', 'image_002.png', '重命名：序号命名'),
+		]
+		
+		# 快速添加测试条目
+		for stage, src, dst, info in test_entries:
+			# 构造消息
+			message = f'LOG\t{stage}\t{src}\t{dst}\t{info}'
+			# 添加到队列
+			self.q.put(message)
+			time.sleep(0.1)  # 稍微延迟以便观察
+		
+		# 添加一些统计信息
+		self.q.put('STATUS\t测试日志生成完成')
+		print("CTk日志测试数据已生成")
 
 	def _clear_log(self):
 		"""
@@ -4406,9 +5301,12 @@ class ImageToolApp:
 			if hasattr(self, '_raw_logs'):
 				self._raw_logs.clear()
 			
-			# 清空显示的日志表格
-			if hasattr(self, 'log'):
-				# 删除所有子项
+			# 清空显示的日志组件
+			if hasattr(self, 'log_view') and self.log_view:
+				# CTk版本：清空CTkLogView
+				self.log_view.clear()
+			elif hasattr(self, 'log') and hasattr(self.log, 'get_children'):
+				# 传统版本：清空Treeview
 				for item in self.log.get_children():
 					self.log.delete(item)
 			
@@ -4584,6 +5482,13 @@ class ImageToolApp:
 
 	# Tooltips
 	def _show_tooltip(self,text,x,y):
+		"""显示悬浮提示。
+
+		Args:
+			text (str): 提示文本。
+			x (int): 屏幕 X 坐标。
+			y (int): 屏幕 Y 坐标。
+		"""
 		self._hide_tooltip()
 		tw=tk.Toplevel(self.root); tw.wm_overrideredirect(True); tw.attributes('-topmost',True)
 		
@@ -4595,11 +5500,18 @@ class ImageToolApp:
 		lab.pack(ipadx=4,ipady=2)
 		tw.wm_geometry(f"+{x+15}+{y+15}"); self._tooltip=tw
 	def _hide_tooltip(self):
+		"""隐藏当前显示的悬浮提示（若存在）。"""
 		if self._tooltip:
 			try: self._tooltip.destroy()
 			except Exception: pass
 		self._tooltip=None
 	def _bind_tip(self,widget,text):
+		"""为控件绑定进入/离开事件以显示/隐藏提示。
+
+		Args:
+			widget: 需要绑定提示的 Tk 组件。
+			text (str): 提示文本。
+		"""
 		def enter(_e):
 			if self._tooltip_after:
 				try: self.root.after_cancel(self._tooltip_after)
@@ -4614,6 +5526,10 @@ class ImageToolApp:
 			self._hide_tooltip()
 		widget.bind('<Enter>',enter,add='+'); widget.bind('<Leave>',leave,add='+'); widget.bind('<ButtonPress>',leave,add='+')
 	def _on_log_motion(self,event):
+		"""日志表格鼠标移动事件。
+
+		当鼠标停留在"源/目标"列时，延迟显示包含完整路径的悬浮提示。
+		"""
 		if self._tooltip_after:
 			self.root.after_cancel(self._tooltip_after); self._tooltip_after=None
 		iid=self.log.identify_row(event.y); col=self.log.identify_column(event.x)
@@ -4650,15 +5566,24 @@ class ImageToolApp:
 		# 由于trace已经绑定，设置值会自动触发过滤
 		
 	def _on_out_dir_change(self, *args):
+		"""当输出目录变更时的回调。
+
+		清除旧的缓存目录，避免跨输出目录复用缓存导致路径混淆，并绑定鼠标离开事件以隐藏悬浮提示。
+		"""
 		# 输出目录改变时清除缓存
 		self._clear_cache()
 		self.root.bind('<Leave>',lambda e: self._hide_tooltip(),add='+')
 
 # 启动
 def launch():
-	if tk is None or Image is None:
+	if (tk is None and ctk is None) or Image is None:
 		print('缺少 Tkinter 或 Pillow'); return 2
-	root=tk.Tk(); ImageToolApp(root); root.mainloop(); return 0
+	# 优先使用 CTk 根窗口
+	if ctk is not None:
+		root=ctk.CTk()
+	else:
+		root=tk.Tk()
+	ImageToolApp(root); root.mainloop(); return 0
 
 if __name__=='__main__':
 	launch()
