@@ -1819,16 +1819,16 @@ class ImageToolApp:
 			content_frame.columnconfigure(i, weight=1 if i in (1, 6) else 0)
 		
 		# 输入行
-		ttk.Label(io_frame, text='输入:').grid(row=0, column=0, sticky='e', padx=(0, 5))
+		(ctk.CTkLabel(content_frame, text='输入:') if ctk is not None else ttk.Label(content_frame, text='输入:')).grid(row=0, column=0, sticky='e', padx=(0, 5))
 		self.in_var = tk.StringVar()
 		if ctk is not None:
-			ent_in = ctk.CTkEntry(io_frame, textvariable=self.in_var, width=320)
+			ent_in = ctk.CTkEntry(content_frame, textvariable=self.in_var, width=320)
 		else:
-			ent_in = ttk.Entry(io_frame, textvariable=self.in_var, width=40)
+			ent_in = ttk.Entry(content_frame, textvariable=self.in_var, width=40)
 		ent_in.grid(row=0, column=1, sticky='we', padx=3)
 		
-		btn_in = (ctk.CTkButton(io_frame, text='目录', command=self._pick_in, width=64)
-				if ctk is not None else ttk.Button(io_frame, text='目录', command=self._pick_in, width=6))
+		btn_in = (ctk.CTkButton(content_frame, text='目录', command=self._pick_in, width=64)
+				if ctk is not None else ttk.Button(content_frame, text='目录', command=self._pick_in, width=6))
 		btn_in.grid(row=0, column=2, padx=(3, 3))
 		
 		btn_in_file = (ctk.CTkButton(io_frame, text='文件', command=self._pick_in_file, width=64)
