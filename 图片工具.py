@@ -1831,37 +1831,37 @@ class ImageToolApp:
 				if ctk is not None else ttk.Button(content_frame, text='目录', command=self._pick_in, width=6))
 		btn_in.grid(row=0, column=2, padx=(3, 3))
 		
-		btn_in_file = (ctk.CTkButton(io_frame, text='文件', command=self._pick_in_file, width=64)
-					 if ctk is not None else ttk.Button(io_frame, text='文件', command=self._pick_in_file, width=6))
+		btn_in_file = (ctk.CTkButton(content_frame, text='文件', command=self._pick_in_file, width=64)
+					 if ctk is not None else ttk.Button(content_frame, text='文件', command=self._pick_in_file, width=6))
 		btn_in_file.grid(row=0, column=3, padx=(0, 8))
 		
 		self.recursive_var = tk.BooleanVar(value=False)
-		cb_rec = (ctk.CTkCheckBox(io_frame, text='递归', variable=self.recursive_var)
-				 if ctk is not None else ttk.Checkbutton(io_frame, text='递归', variable=self.recursive_var))
+		cb_rec = (ctk.CTkCheckBox(content_frame, text='递归', variable=self.recursive_var)
+				 if ctk is not None else ttk.Checkbutton(content_frame, text='递归', variable=self.recursive_var))
 		cb_rec.grid(row=0, column=4, sticky='w')
 		
 		# 输出行
-		ttk.Label(io_frame, text='输出:').grid(row=1, column=0, sticky='e', padx=(0, 5), pady=(8, 0))
+		(ctk.CTkLabel(content_frame, text='输出:') if ctk is not None else ttk.Label(content_frame, text='输出:')).grid(row=1, column=0, sticky='e', padx=(0, 5), pady=(8, 0))
 		self.out_var = tk.StringVar()
 		if ctk is not None:
-			ent_out = ctk.CTkEntry(io_frame, textvariable=self.out_var, width=260)
+			ent_out = ctk.CTkEntry(content_frame, textvariable=self.out_var, width=260)
 		else:
-			ent_out = ttk.Entry(io_frame, textvariable=self.out_var, width=32)
+			ent_out = ttk.Entry(content_frame, textvariable=self.out_var, width=32)
 		ent_out.grid(row=1, column=1, sticky='we', padx=3, pady=(8, 0))
 		self.out_var.trace_add('write', self._on_out_dir_change)
 		
-		btn_out = (ctk.CTkButton(io_frame, text='选择', command=self._pick_out, width=64)
-				 if ctk is not None else ttk.Button(io_frame, text='选择', command=self._pick_out, width=6))
+		btn_out = (ctk.CTkButton(content_frame, text='选择', command=self._pick_out, width=64)
+				 if ctk is not None else ttk.Button(content_frame, text='选择', command=self._pick_out, width=6))
 		btn_out.grid(row=1, column=2, padx=(3, 3), pady=(8, 0))
 		
-		btn_open_out = (ctk.CTkButton(io_frame, text='打开', command=self._open_last_out, width=64)
-					  if ctk is not None else ttk.Button(io_frame, text='打开', command=self._open_last_out, width=6))
+		btn_open_out = (ctk.CTkButton(content_frame, text='打开', command=self._open_last_out, width=64)
+					  if ctk is not None else ttk.Button(content_frame, text='打开', command=self._open_last_out, width=6))
 		btn_open_out.grid(row=1, column=3, padx=(0, 0), pady=(8, 0))
 		
 		# 清空输出目录选项
 		self.clear_output_var = tk.BooleanVar(value=True)  # 默认清空
-		cb_clear_output = (ctk.CTkCheckBox(io_frame, text='清空输出目录', variable=self.clear_output_var)
-						  if ctk is not None else ttk.Checkbutton(io_frame, text='清空输出目录', variable=self.clear_output_var))
+		cb_clear_output = (ctk.CTkCheckBox(content_frame, text='清空输出目录', variable=self.clear_output_var)
+						  if ctk is not None else ttk.Checkbutton(content_frame, text='清空输出目录', variable=self.clear_output_var))
 		cb_clear_output.grid(row=1, column=4, sticky='w', pady=(8, 0), padx=(8, 0))
 		
 		# 保存引用供tooltip使用
@@ -1876,8 +1876,16 @@ class ImageToolApp:
 		
 	def _build_skip_formats_section(self):
 		"""构建跳过格式配置区域"""
-		skip_frame = ttk.LabelFrame(self.left_frame, text='跳过(过滤)格式', padding=(8, 6))
-		skip_frame.pack(fill='x', pady=(0, 8))
+		if ctk is not None:
+			skip_frame = ctk.CTkFrame(self.left_frame)
+			skip_frame.pack(fill='x', pady=(0, 8))
+			
+			# 标题
+			title_label = ctk.CTkLabel(skip_frame, text='跳过(过滤)格式', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+		else:
+			skip_frame = ttk.LabelFrame(self.left_frame, text='跳过(过滤)格式', padding=(8, 6))
+			skip_frame.pack(fill='x', pady=(0, 8))
 		
 		# 启用控制行
 		skip_enable_frame = (ctk.CTkFrame(skip_frame) if ctk is not None else ttk.Frame(skip_frame))
@@ -2335,10 +2343,18 @@ class ImageToolApp:
 		
 		if use_ctk_left and ctk is not None:
 			rename=ctk.CTkFrame(self.left_frame)
-			ctk.CTkLabel(rename, text='重命名').pack(anchor='w', padx=8, pady=(4,2))
 			rename.pack(fill='x',pady=(0,10))
+			
+			# 标题
+			title_label = ctk.CTkLabel(rename, text='重命名', font=ctk.CTkFont(weight="bold"))
+			title_label.pack(anchor='w', padx=8, pady=(4, 2))
+			
+			# 内容区域使用grid布局
+			rename_content_frame = ctk.CTkFrame(rename)
+			rename_content_frame.pack(fill='x', padx=8, pady=(0, 4))
 		else:
 			rename=ttk.LabelFrame(self.left_frame,text='重命名'); rename.pack(fill='x',pady=(0,10))
+			rename_content_frame = rename  # 传统版本直接使用rename
 		self.frame_rename=rename
 		self.pattern_var=tk.StringVar(value='{name}_{index}.{fmt}')
 		self.start_var=tk.IntVar(value=1)
@@ -2422,20 +2438,20 @@ class ImageToolApp:
 		except Exception as e:
 			# 加载失败时静默处理，保持默认值
 			pass
-		ttk.Label(rename,text='模式').grid(row=0,column=0,sticky='e')
-		ent_pattern=ttk.Entry(rename,textvariable=self.pattern_var,width=42); ent_pattern.grid(row=0,column=1,sticky='w',padx=(0,8))
-		ttk.Label(rename,text='起始').grid(row=0,column=2,sticky='e')
-		sp_start=ttk.Spinbox(rename,from_=1,to=999999,textvariable=self.start_var,width=7); sp_start.grid(row=0,column=3,sticky='w')
-		ttk.Label(rename,text='步长').grid(row=0,column=4,sticky='e')
-		sp_step=ttk.Spinbox(rename,from_=1,to=9999,textvariable=self.step_var,width=5); sp_step.grid(row=0,column=5,sticky='w')
-		ttk.Label(rename,text='宽度').grid(row=0,column=6,sticky='e')
-		sp_indexw=ttk.Spinbox(rename,from_=0,to=10,textvariable=self.index_width_var,width=5); sp_indexw.grid(row=0,column=7,sticky='w')
-		ttk.Label(rename,text='覆盖策略').grid(row=0,column=8,sticky='e')
-		cb_over=ttk.Combobox(rename,textvariable=self.overwrite_var,values=list(OVERWRITE_MAP.keys()),width=12,state='readonly'); cb_over.grid(row=0,column=9,sticky='w')
-		for i in range(10): rename.columnconfigure(i,weight=0)
+		(ctk.CTkLabel(rename_content_frame,text='模式') if use_ctk_left and ctk is not None else ttk.Label(rename_content_frame,text='模式')).grid(row=0,column=0,sticky='e')
+		ent_pattern=(ctk.CTkEntry(rename_content_frame,textvariable=self.pattern_var,width=320) if use_ctk_left and ctk is not None else ttk.Entry(rename_content_frame,textvariable=self.pattern_var,width=42)); ent_pattern.grid(row=0,column=1,sticky='w',padx=(0,8))
+		(ctk.CTkLabel(rename_content_frame,text='起始') if use_ctk_left and ctk is not None else ttk.Label(rename_content_frame,text='起始')).grid(row=0,column=2,sticky='e')
+		sp_start=ttk.Spinbox(rename_content_frame,from_=1,to=999999,textvariable=self.start_var,width=7); sp_start.grid(row=0,column=3,sticky='w')
+		(ctk.CTkLabel(rename_content_frame,text='步长') if use_ctk_left and ctk is not None else ttk.Label(rename_content_frame,text='步长')).grid(row=0,column=4,sticky='e')
+		sp_step=ttk.Spinbox(rename_content_frame,from_=1,to=9999,textvariable=self.step_var,width=5); sp_step.grid(row=0,column=5,sticky='w')
+		(ctk.CTkLabel(rename_content_frame,text='宽度') if use_ctk_left and ctk is not None else ttk.Label(rename_content_frame,text='宽度')).grid(row=0,column=6,sticky='e')
+		sp_indexw=ttk.Spinbox(rename_content_frame,from_=0,to=10,textvariable=self.index_width_var,width=5); sp_indexw.grid(row=0,column=7,sticky='w')
+		(ctk.CTkLabel(rename_content_frame,text='覆盖策略') if use_ctk_left and ctk is not None else ttk.Label(rename_content_frame,text='覆盖策略')).grid(row=0,column=8,sticky='e')
+		cb_over=ttk.Combobox(rename_content_frame,textvariable=self.overwrite_var,values=list(OVERWRITE_MAP.keys()),width=12,state='readonly'); cb_over.grid(row=0,column=9,sticky='w')
+		for i in range(10): rename_content_frame.columnconfigure(i,weight=0)
 		
 		# 重命名预设按钮行 - 第一行
-		preset_rename_frame1=ttk.Frame(rename)
+		preset_rename_frame1=(ctk.CTkFrame(rename_content_frame) if use_ctk_left and ctk is not None else ttk.Frame(rename_content_frame))
 		preset_rename_frame1.grid(row=1,column=0,columnspan=10,sticky='w',pady=(4,2))
 		preset_patterns_common=[
 			('序号在前', '{index}_{name}.{fmt}'),
@@ -2448,12 +2464,12 @@ class ImageToolApp:
 		]
 		self._rename_preset_buttons=[]
 		for name, pattern in preset_patterns_common:
-			btn=ttk.Button(preset_rename_frame1,text=name,width=10,command=lambda p=pattern: self.pattern_var.set(p))
+			btn=(ctk.CTkButton(preset_rename_frame1,text=name,width=80,command=lambda p=pattern: self.pattern_var.set(p)) if use_ctk_left and ctk is not None else ttk.Button(preset_rename_frame1,text=name,width=10,command=lambda p=pattern: self.pattern_var.set(p)))
 			btn.pack(side='left',padx=2)
 			self._rename_preset_buttons.append(btn)
 		
 		# 重命名预设按钮行 - 第二行 (日期和特殊格式)
-		preset_rename_frame2=ttk.Frame(rename)
+		preset_rename_frame2=(ctk.CTkFrame(rename_content_frame) if use_ctk_left and ctk is not None else ttk.Frame(rename_content_frame))
 		preset_rename_frame2.grid(row=2,column=0,columnspan=10,sticky='w',pady=(2,2))
 		preset_patterns_date=[
 			('日期+序号', '{date}_{index}.{fmt}'),
@@ -2463,31 +2479,34 @@ class ImageToolApp:
 			('前缀+日期', 'img_{date}.{fmt}')
 		]
 		for name, pattern in preset_patterns_date:
-			btn=ttk.Button(preset_rename_frame2,text=name,width=12,command=lambda p=pattern: self.pattern_var.set(p))
+			btn=(ctk.CTkButton(preset_rename_frame2,text=name,width=96,command=lambda p=pattern: self.pattern_var.set(p)) if use_ctk_left and ctk is not None else ttk.Button(preset_rename_frame2,text=name,width=12,command=lambda p=pattern: self.pattern_var.set(p)))
 			btn.pack(side='left',padx=2)
 			self._rename_preset_buttons.append(btn)
 		
 		# 重置和高级按钮
 		# 在重命名区域中保留原有的重命名专用重置按钮
-		preset_rename_frame3=ttk.Frame(rename)
+		preset_rename_frame3=(ctk.CTkFrame(rename_content_frame) if use_ctk_left and ctk is not None else ttk.Frame(rename_content_frame))
 		preset_rename_frame3.grid(row=3,column=0,columnspan=10,sticky='w',pady=(2,4))
-		self.btn_reset_rename=ttk.Button(preset_rename_frame3,text='重置重命名',width=10,
+		self.btn_reset_rename=(ctk.CTkButton(preset_rename_frame3,text='重置重命名',width=80,
+			command=lambda: self.pattern_var.set('{name}_{index}.{fmt}')) if use_ctk_left and ctk is not None else ttk.Button(preset_rename_frame3,text='重置重命名',width=10,
 			command=lambda: [self.pattern_var.set('{name}_{index}.{fmt}'),
 			                self.start_var.set(1),
 			                self.step_var.set(1),
 			                self.index_width_var.set(3),
-			                self.overwrite_var.set(_rev_map(OVERWRITE_MAP)['overwrite'])])
+			                self.overwrite_var.set(_rev_map(OVERWRITE_MAP)['overwrite'])]))
 		self.btn_reset_rename.pack(side='left',padx=2)
 
 		# 全局设置管理按钮
-		global_settings_frame=ttk.Frame(self.left_frame)
+		global_settings_frame=(ctk.CTkFrame(self.left_frame) if ctk is not None else ttk.Frame(self.left_frame))
 		global_settings_frame.pack(fill='x',pady=(0,6))
-		btn_reset_all=ttk.Button(global_settings_frame,text='重置为默认',width=12,
-			command=self._reset_all_to_default)
+		btn_reset_all=(ctk.CTkButton(global_settings_frame,text='重置为默认',width=96,
+			command=self._reset_all_to_default) if ctk is not None else ttk.Button(global_settings_frame,text='重置为默认',width=12,
+			command=self._reset_all_to_default))
 		btn_reset_all.pack(side='right',padx=(0,4))
 		
-		btn_set_global_defaults=ttk.Button(global_settings_frame,text='设置为默认',width=12,
-			command=self._set_current_as_default)
+		btn_set_global_defaults=(ctk.CTkButton(global_settings_frame,text='设置为默认',width=96,
+			command=self._set_current_as_default) if ctk is not None else ttk.Button(global_settings_frame,text='设置为默认',width=12,
+			command=self._set_current_as_default))
 		btn_set_global_defaults.pack(side='right',padx=(0,4))
 
 		# 进度状态显示
